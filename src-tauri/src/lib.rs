@@ -128,6 +128,7 @@ async fn start_chatgpt_login(
 pub fn run() {
     let server = AppServer::new();
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(Arc::clone(&server))
         .setup(move |app| {
             let handle = app.handle().clone();

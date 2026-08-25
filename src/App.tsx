@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Archive, ArrowUp, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Pencil, Search, Settings, Sparkles, Unplug, UserRound } from "lucide-react";
+import { Activity, Archive, ArrowUp, Bell, BellOff, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Pencil, Search, Settings, Sparkles, Unplug, UserRound } from "lucide-react";
 import { getSession, getSnapshot, interruptTurn, sendTurn, startLogin, subscribe } from "./lib/bridge";
 import { MessageContent } from "./components/MessageContent";
 import { CommandActivity } from "./components/CommandActivity";
@@ -9,6 +9,7 @@ import { NewSessionDialog } from "./components/NewSessionDialog";
 import { SessionActionDialog } from "./components/SessionActionDialog";
 import { useSessionSync } from "./hooks/useSessionSync";
 import { useSessionListSync } from "./hooks/useSessionListSync";
+import { useDesktopNotifications } from "./hooks/useDesktopNotifications";
 import { useDashboard } from "./store";
 import type { ApprovalRequest, DashboardSnapshot, Session, SessionStatus } from "./types";
 
@@ -106,13 +107,14 @@ function Workspace({ session, approvals, loading, error }: { session?: Session; 
   </main>;
 }
 
-function SettingsView() {
+function SettingsView({ notificationsEnabled, notificationError, onNotificationsChange }: { notificationsEnabled: boolean; notificationError?: string; onNotificationsChange: (enabled: boolean) => Promise<boolean> }) {
   const { account, connected, setSettingsOpen } = useDashboard();
   const [loggingIn, setLoggingIn] = useState(false);
   const login = async () => { setLoggingIn(true); try { const url = await startLogin(); if (url) window.open(url, "_blank"); } finally { setLoggingIn(false); } };
   return <main className="workspace settings-view"><header className="workspace-header"><div><h1>Account & usage</h1><p>Manage your Codex connection</p></div><button className="subtle-button" onClick={() => setSettingsOpen(false)}>Done</button></header>
     <div className="settings-content"><section className="settings-section"><h2>ChatGPT account</h2><div className="settings-card"><span className="large-avatar"><UserRound size={22} /></span><div className="settings-account"><strong>{account.email ?? "No account connected"}</strong><span>{account.plan ? `ChatGPT ${account.plan}` : "Connect an account to use Codex"}</span></div><button className="primary-button" onClick={() => void login()} disabled={loggingIn}><LogIn size={15} /> {loggingIn ? "Opening…" : account.connected ? "Reconnect" : "Connect"}</button></div></section>
     <section className="settings-section"><h2>Connection</h2><div className="settings-card compact"><span className={`connection-icon ${connected ? "online" : ""}`}>{connected ? <Activity size={19} /> : <Unplug size={19} />}</span><div className="settings-account"><strong>Codex App Server</strong><span>{connected ? "Connected and receiving live events" : "Not connected — dashboard is showing preview data"}</span></div><span className={`connection-label ${connected ? "online" : ""}`}>{connected ? "Online" : "Offline"}</span></div></section>
+    <section className="settings-section"><h2>Notifications</h2><div className="settings-card compact"><span className={`connection-icon ${notificationsEnabled ? "online" : ""}`}>{notificationsEnabled ? <Bell size={19} /> : <BellOff size={19} />}</span><div className="settings-account"><strong>Desktop notifications</strong><span>Notify when Codex finishes, needs approval, or encounters an error</span>{notificationError && <em className="settings-error">{notificationError}</em>}</div><button className={`toggle ${notificationsEnabled ? "on" : ""}`} role="switch" aria-checked={notificationsEnabled} aria-label="Desktop notifications" onClick={() => void onNotificationsChange(!notificationsEnabled)}><span /></button></div></section>
     <section className="settings-section"><h2>Usage window</h2><div className="usage-large"><div><span>Current usage</span><strong>{account.usedPercent == null ? "—" : `${Math.round(account.usedPercent)}%`}</strong></div><div className="usage-track"><span style={{ width: `${account.usedPercent ?? 0}%` }} /></div><p><Clock3 size={14} /> {account.resetsAt ? `Resets ${relativeReset(account.resetsAt)}` : "Reset time is unavailable"}</p></div></section></div>
   </main>;
 }
@@ -121,6 +123,7 @@ export function App() {
   const { sessions, approvals, selectedId, settingsOpen, connected, loadingSessionId, sessionError, hydrate, applyEvent, mergeSession, addSession, removeSession, setSessionLoading } = useDashboard();
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [sessionAction, setSessionAction] = useState<{ action: "rename" | "archive"; session: Session }>();
+  const notifications = useDesktopNotifications(sessions, approvals ?? []);
   const applySnapshot = useCallback((snapshot: DashboardSnapshot) => applyEvent({ type: "snapshot", snapshot }), [applyEvent]);
   useEffect(() => { let unsubscribe: () => void = () => undefined; void getSnapshot().then((snapshot) => hydrate(snapshot.sessions, snapshot.approvals ?? [], snapshot.account, snapshot.connected)); void subscribe(applyEvent).then((fn) => { unsubscribe = fn; }); return () => unsubscribe(); }, [hydrate, applyEvent]);
   const session = useMemo(() => sessions.find((item) => item.id === selectedId), [sessions, selectedId]);
@@ -144,5 +147,5 @@ export function App() {
     return () => window.removeEventListener("keydown", openNewSession);
   }, []);
   const sessionApprovals = (approvals ?? []).filter((approval) => approval.threadId === selectedId);
-  return <div className="app-shell"><Sidebar onNewSession={() => setNewSessionOpen(true)} onSessionAction={(action, target) => setSessionAction({ action, session: target })} />{settingsOpen ? <SettingsView /> : <Workspace session={session} approvals={sessionApprovals} loading={loadingSessionId === selectedId} error={sessionError} />}{newSessionOpen && <NewSessionDialog defaultCwd={session?.cwd ?? ""} defaultModel={session?.model} onClose={() => setNewSessionOpen(false)} onCreated={(created) => { addSession(created); setNewSessionOpen(false); }} />}{sessionAction && <SessionActionDialog action={sessionAction.action} session={sessionAction.session} onClose={() => setSessionAction(undefined)} onRenamed={(renamed) => { mergeSession(renamed); setSessionAction(undefined); }} onArchived={(id) => { removeSession(id); setSessionAction(undefined); }} />}</div>;
+  return <div className="app-shell"><Sidebar onNewSession={() => setNewSessionOpen(true)} onSessionAction={(action, target) => setSessionAction({ action, session: target })} />{settingsOpen ? <SettingsView notificationsEnabled={notifications.enabled} notificationError={notifications.permissionError} onNotificationsChange={notifications.setEnabled} /> : <Workspace session={session} approvals={sessionApprovals} loading={loadingSessionId === selectedId} error={sessionError} />}{newSessionOpen && <NewSessionDialog defaultCwd={session?.cwd ?? ""} defaultModel={session?.model} onClose={() => setNewSessionOpen(false)} onCreated={(created) => { addSession(created); setNewSessionOpen(false); }} />}{sessionAction && <SessionActionDialog action={sessionAction.action} session={sessionAction.session} onClose={() => setSessionAction(undefined)} onRenamed={(renamed) => { mergeSession(renamed); setSessionAction(undefined); }} onArchived={(id) => { removeSession(id); setSessionAction(undefined); }} />}</div>;
 }
