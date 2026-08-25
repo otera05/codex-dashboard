@@ -394,14 +394,36 @@ impl AppServer {
             )
             .await?;
         }
-        let snapshot = self.reload_sessions().await?;
-        snapshot
-            .sessions
-            .into_iter()
-            .find(|session| session.id == thread_id)
-            .ok_or_else(|| {
-                AppServerError::Rpc("New session was not returned by thread/list".to_owned())
-            })
+        let thread = response
+            .get("thread")
+            .cloned()
+            .ok_or_else(|| AppServerError::Rpc("thread/start returned no thread".to_owned()))?;
+        let mut session = parse_sessions(&json!({ "data": [thread] }))
+            .pop()
+            .ok_or_else(|| AppServerError::Rpc("Could not parse the new session".to_owned()))?;
+        session.model = response
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("Codex")
+            .to_owned();
+        if session.title.trim().is_empty() || session.title == "Untitled session" {
+            session.title = prompt
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .unwrap_or("New session")
+                .chars()
+                .take(80)
+                .collect();
+        }
+        if !prompt.trim().is_empty() {
+            session.status = "working".to_owned();
+        }
+        let mut snapshot = self.snapshot.write().await;
+        snapshot.sessions.retain(|item| item.id != thread_id);
+        snapshot.sessions.insert(0, session.clone());
+        Ok(session)
     }
 
     pub async fn refresh_session(&self, thread_id: &str) -> Result<Session, AppServerError> {

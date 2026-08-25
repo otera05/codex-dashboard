@@ -189,6 +189,7 @@ pub fn parse_sessions(value: &Value) -> Vec<Session> {
             let preview = thread
                 .get("preview")
                 .and_then(Value::as_str)
+                .filter(|preview| !preview.trim().is_empty())
                 .unwrap_or("Untitled session");
             let title = thread
                 .get("name")
@@ -466,6 +467,17 @@ mod tests {
             token_usage: TokenUsage::default(),
             history_loaded: false,
         }
+    }
+
+    #[test]
+    fn gives_a_new_thread_with_an_empty_preview_a_title() {
+        let sessions = parse_sessions(&json!({ "data": [{
+            "id": "thread-new", "preview": "", "name": null, "cwd": "/workspace",
+            "status": { "type": "idle" }, "updatedAt": 1_700_000_000
+        }] }));
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].title, "Untitled session");
     }
 
     #[test]
