@@ -31,7 +31,7 @@ async fn send_turn(
     server
         .request("thread/resume", json!({ "threadId": thread_id }))
         .await?;
-    server.request("turn/start", json!({ "threadId": thread_id, "input": [{ "type": "text", "text": text, "textElements": [] }] })).await?;
+    server.request("turn/start", json!({ "threadId": thread_id, "input": [{ "type": "text", "text": text, "text_elements": [] }] })).await?;
     Ok(())
 }
 
