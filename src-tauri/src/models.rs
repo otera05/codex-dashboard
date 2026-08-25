@@ -133,6 +133,15 @@ pub struct ApprovalRequest {
     pub available_decisions: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexModel {
+    pub id: String,
+    pub display_name: String,
+    pub description: String,
+    pub is_default: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RpcEnvelope {
     pub id: Option<Value>,

@@ -18,7 +18,7 @@ use tokio::{
 
 use crate::models::{
     apply_turn_history, merge_turn_history, parse_account, parse_sessions, ApprovalRequest,
-    DashboardSnapshot, RpcEnvelope, Session,
+    CodexModel, DashboardSnapshot, RpcEnvelope, Session,
 };
 
 #[derive(Debug, Error)]
@@ -334,6 +334,74 @@ impl AppServer {
             .ok_or_else(|| AppServerError::Rpc(format!("Session {thread_id} was not found")))?;
         apply_turn_history(session, &turns);
         Ok(session.clone())
+    }
+
+    pub async fn list_models(&self) -> Result<Vec<CodexModel>, AppServerError> {
+        let response = self
+            .request(
+                "model/list",
+                json!({ "limit": 100, "includeHidden": false }),
+            )
+            .await?;
+        Ok(response
+            .get("data")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|model| {
+                let id = model.get("model").and_then(Value::as_str)?.to_owned();
+                Some(CodexModel {
+                    display_name: model
+                        .get("displayName")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&id)
+                        .to_owned(),
+                    description: model
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    is_default: model
+                        .get("isDefault")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    id,
+                })
+            })
+            .collect())
+    }
+
+    pub async fn create_thread(
+        &self,
+        cwd: &str,
+        model: Option<&str>,
+        prompt: &str,
+    ) -> Result<Session, AppServerError> {
+        let mut params = json!({ "cwd": cwd, "threadSource": "codex-dashboard" });
+        if let Some(model) = model.filter(|value| !value.is_empty()) {
+            params["model"] = json!(model);
+        }
+        let response = self.request("thread/start", params).await?;
+        let thread_id = response
+            .pointer("/thread/id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppServerError::Rpc("thread/start returned no thread id".to_owned()))?
+            .to_owned();
+        if !prompt.trim().is_empty() {
+            self.request(
+                "turn/start",
+                json!({ "threadId": thread_id, "input": [{ "type": "text", "text": prompt, "text_elements": [] }] }),
+            )
+            .await?;
+        }
+        let snapshot = self.reload_sessions().await?;
+        snapshot
+            .sessions
+            .into_iter()
+            .find(|session| session.id == thread_id)
+            .ok_or_else(|| {
+                AppServerError::Rpc("New session was not returned by thread/list".to_owned())
+            })
     }
 
     pub async fn refresh_session(&self, thread_id: &str) -> Result<Session, AppServerError> {

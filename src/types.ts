@@ -75,6 +75,13 @@ export interface ApprovalRequest {
   availableDecisions: string[];
 }
 
+export interface CodexModel {
+  id: string;
+  displayName: string;
+  description: string;
+  isDefault: boolean;
+}
+
 export interface DashboardSnapshot {
   sessions: Session[];
   approvals?: ApprovalRequest[];

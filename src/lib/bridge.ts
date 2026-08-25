@@ -1,4 +1,4 @@
-import type { DashboardEvent, DashboardSnapshot, Session } from "../types";
+import type { CodexModel, DashboardEvent, DashboardSnapshot, Session } from "../types";
 
 const demoSnapshot: DashboardSnapshot = {
   connected: false,
@@ -50,6 +50,31 @@ export async function refreshSessionList(): Promise<DashboardSnapshot> {
   if (!isTauri()) return getSnapshot();
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<DashboardSnapshot>("refresh_session_list");
+}
+
+export async function listModels(): Promise<CodexModel[]> {
+  if (!isTauri()) return [
+    { id: "gpt-5.6-codex", displayName: "GPT-5.6 Codex", description: "Frontier coding model", isDefault: true },
+    { id: "gpt-5.5", displayName: "GPT-5.5", description: "General-purpose model", isDefault: false },
+  ];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<CodexModel[]>("list_models");
+}
+
+export async function createThread(cwd: string, model: string | undefined, prompt: string): Promise<Session> {
+  if (!isTauri()) return {
+    id: `demo-${Date.now()}`,
+    title: prompt.trim() || "New session",
+    cwd,
+    status: prompt.trim() ? "working" : "idle",
+    updatedAt: Date.now(),
+    model: model || "Codex",
+    messages: prompt.trim() ? [{ type: "message", id: `demo-message-${Date.now()}`, role: "user", text: prompt.trim(), createdAt: Date.now() }] : [],
+    tokenUsage: { input: 0, output: 0, cached: 0 },
+    historyLoaded: true,
+  };
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Session>("create_thread", { cwd, model, prompt });
 }
 
 export async function sendTurn(threadId: string, text: string): Promise<void> {

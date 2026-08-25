@@ -2,7 +2,7 @@ mod app_server;
 mod models;
 
 use app_server::{AppServer, AppServerError};
-use models::{DashboardSnapshot, Session};
+use models::{CodexModel, DashboardSnapshot, Session};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tauri::State;
@@ -35,6 +35,21 @@ async fn refresh_session_list(
     server: State<'_, Arc<AppServer>>,
 ) -> Result<DashboardSnapshot, AppServerError> {
     server.reload_sessions().await
+}
+
+#[tauri::command]
+async fn list_models(server: State<'_, Arc<AppServer>>) -> Result<Vec<CodexModel>, AppServerError> {
+    server.list_models().await
+}
+
+#[tauri::command]
+async fn create_thread(
+    server: State<'_, Arc<AppServer>>,
+    cwd: String,
+    model: Option<String>,
+    prompt: String,
+) -> Result<Session, AppServerError> {
+    server.create_thread(&cwd, model.as_deref(), &prompt).await
 }
 
 #[tauri::command]
@@ -112,6 +127,8 @@ pub fn run() {
             get_session,
             refresh_session,
             refresh_session_list,
+            list_models,
+            create_thread,
             send_turn,
             interrupt_turn,
             resolve_approval,

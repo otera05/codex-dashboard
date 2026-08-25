@@ -5,6 +5,7 @@ import { MessageContent } from "./components/MessageContent";
 import { CommandActivity } from "./components/CommandActivity";
 import { FileChangeActivity } from "./components/FileChangeActivity";
 import { ApprovalCard } from "./components/ApprovalCard";
+import { NewSessionDialog } from "./components/NewSessionDialog";
 import { useSessionSync } from "./hooks/useSessionSync";
 import { useSessionListSync } from "./hooks/useSessionListSync";
 import { useDashboard } from "./store";
@@ -19,7 +20,7 @@ function relativeTime(timestamp: number) {
   return `${Math.floor(seconds / 3600)}h`;
 }
 
-function Sidebar() {
+function Sidebar({ onNewSession }: { onNewSession: () => void }) {
   const { sessions, selectedId, select, account, connected, setSettingsOpen } = useDashboard();
   const [query, setQuery] = useState("");
   const filtered = sessions.filter((session) => session.title.toLowerCase().includes(query.toLowerCase()));
@@ -27,7 +28,7 @@ function Sidebar() {
   return <aside className="sidebar">
     <div className="window-drag"><span /><span /><span /></div>
     <div className="brand-row"><div className="brand"><span className="brand-mark"><Sparkles size={15} /></span><span>Codex</span></div><button className="icon-button" aria-label="Collapse sidebar"><PanelLeftClose size={17} /></button></div>
-    <button className="new-session"><MessageSquarePlus size={16} /> New session <kbd>⌘ N</kbd></button>
+    <button className="new-session" onClick={onNewSession}><MessageSquarePlus size={16} /> New session <kbd>⌘ N</kbd></button>
     <label className="search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search sessions" /></label>
     <div className="section-title"><span>Sessions</span><span>{filtered.length}</span></div>
     <nav className="session-list">
@@ -110,7 +111,8 @@ function SettingsView() {
 }
 
 export function App() {
-  const { sessions, approvals, selectedId, settingsOpen, connected, loadingSessionId, sessionError, hydrate, applyEvent, mergeSession, setSessionLoading } = useDashboard();
+  const { sessions, approvals, selectedId, settingsOpen, connected, loadingSessionId, sessionError, hydrate, applyEvent, mergeSession, addSession, setSessionLoading } = useDashboard();
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
   const applySnapshot = useCallback((snapshot: DashboardSnapshot) => applyEvent({ type: "snapshot", snapshot }), [applyEvent]);
   useEffect(() => { let unsubscribe: () => void = () => undefined; void getSnapshot().then((snapshot) => hydrate(snapshot.sessions, snapshot.approvals ?? [], snapshot.account, snapshot.connected)); void subscribe(applyEvent).then((fn) => { unsubscribe = fn; }); return () => unsubscribe(); }, [hydrate, applyEvent]);
   const session = useMemo(() => sessions.find((item) => item.id === selectedId), [sessions, selectedId]);
@@ -123,6 +125,16 @@ export function App() {
   }, [selectedId, connected, session?.historyLoaded, mergeSession, setSessionLoading]);
   useSessionSync({ threadId: selectedId, enabled: connected && Boolean(session?.historyLoaded), onSession: mergeSession });
   useSessionListSync({ enabled: connected, onSnapshot: applySnapshot });
+  useEffect(() => {
+    const openNewSession = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        setNewSessionOpen(true);
+      }
+    };
+    window.addEventListener("keydown", openNewSession);
+    return () => window.removeEventListener("keydown", openNewSession);
+  }, []);
   const sessionApprovals = (approvals ?? []).filter((approval) => approval.threadId === selectedId);
-  return <div className="app-shell"><Sidebar />{settingsOpen ? <SettingsView /> : <Workspace session={session} approvals={sessionApprovals} loading={loadingSessionId === selectedId} error={sessionError} />}</div>;
+  return <div className="app-shell"><Sidebar onNewSession={() => setNewSessionOpen(true)} />{settingsOpen ? <SettingsView /> : <Workspace session={session} approvals={sessionApprovals} loading={loadingSessionId === selectedId} error={sessionError} />}{newSessionOpen && <NewSessionDialog defaultCwd={session?.cwd ?? ""} defaultModel={session?.model} onClose={() => setNewSessionOpen(false)} onCreated={(created) => { addSession(created); setNewSessionOpen(false); }} />}</div>;
 }

@@ -15,6 +15,7 @@ interface DashboardState {
   setSettingsOpen: (open: boolean) => void;
   setSessionLoading: (id?: string, error?: string) => void;
   mergeSession: (session: Session) => void;
+  addSession: (session: Session) => void;
   applyEvent: (event: DashboardEvent) => void;
 }
 
@@ -34,6 +35,11 @@ export const useDashboard = create<DashboardState>((set) => ({
     sessions: state.sessions.map((item) => item.id === session.id ? session : item),
     loadingSessionId: state.loadingSessionId === session.id ? undefined : state.loadingSessionId,
     sessionError: undefined,
+  })),
+  addSession: (session) => set((state) => ({
+    sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)],
+    selectedId: session.id,
+    settingsOpen: false,
   })),
   applyEvent: (event) => set((state) => {
     if (event.type === "snapshot") {

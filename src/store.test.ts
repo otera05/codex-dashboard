@@ -70,4 +70,13 @@ describe("dashboard session list updates", () => {
     useDashboard.getState().applyEvent({ type: "approval.resolved", requestId: 12 });
     expect(useDashboard.getState().approvals).toEqual([]);
   });
+
+  it("adds and selects a newly created session", () => {
+    useDashboard.setState({ sessions: [session("existing")], selectedId: "existing" });
+
+    useDashboard.getState().addSession(session("created", true));
+
+    expect(useDashboard.getState().sessions.map(({ id }) => id)).toEqual(["created", "existing"]);
+    expect(useDashboard.getState().selectedId).toBe("created");
+  });
 });
