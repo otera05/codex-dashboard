@@ -9,7 +9,7 @@ const session = (id: string, historyLoaded = false): Session => ({
   status: "idle",
   updatedAt: 1_700_000_000_000,
   model: "Codex",
-  messages: historyLoaded ? [{ id: `${id}:message`, role: "assistant", text: "Cached", createdAt: 1 }] : [],
+  messages: historyLoaded ? [{ type: "message", id: `${id}:message`, role: "assistant", text: "Cached", createdAt: 1 }] : [],
   tokenUsage: { input: 0, output: 0, cached: 0 },
   historyLoaded,
 });
@@ -36,7 +36,7 @@ describe("dashboard session list updates", () => {
     });
 
     expect(useDashboard.getState().sessions.map(({ id }) => id)).toEqual(["new", "existing"]);
-    expect(useDashboard.getState().sessions[1].messages[0].text).toBe("Cached");
+    expect(useDashboard.getState().sessions[1].messages[0]).toMatchObject({ type: "message", text: "Cached" });
     expect(useDashboard.getState().selectedId).toBe("existing");
   });
 

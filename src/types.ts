@@ -8,18 +8,33 @@ export interface Session {
   updatedAt: number;
   model: string;
   activeTurnId?: string;
-  messages: Message[];
+  messages: TimelineItem[];
   tokenUsage: { input: number; output: number; cached: number };
   historyLoaded?: boolean;
 }
 
 export interface Message {
+  type: "message";
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
   createdAt: number;
   streaming?: boolean;
 }
+
+export interface CommandActivity {
+  type: "command";
+  id: string;
+  command: string;
+  cwd: string;
+  status: "inProgress" | "completed" | "failed" | "declined";
+  output?: string;
+  exitCode?: number;
+  durationMs?: number;
+  createdAt: number;
+}
+
+export type TimelineItem = Message | CommandActivity;
 
 export interface Account {
   connected: boolean;

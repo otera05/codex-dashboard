@@ -53,7 +53,7 @@ describe("session history loading", () => {
     bridge.getSession.mockResolvedValue({
       ...unloadedSession,
       historyLoaded: true,
-      messages: [{ id: "message-1", role: "assistant", text: "Loaded from App Server", createdAt: 1_700_000_000_000 }],
+      messages: [{ type: "message", id: "message-1", role: "assistant", text: "Loaded from App Server", createdAt: 1_700_000_000_000 }],
     });
     bridge.subscribe.mockResolvedValue(() => undefined);
   });

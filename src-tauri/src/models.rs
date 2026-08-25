@@ -11,14 +11,47 @@ pub struct TokenUsage {
 }
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Message {
-    pub id: String,
-    pub role: String,
-    pub text: String,
-    pub created_at: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub streaming: Option<bool>,
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TimelineItem {
+    Message {
+        id: String,
+        role: String,
+        text: String,
+        created_at: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        streaming: Option<bool>,
+    },
+    Command {
+        id: String,
+        command: String,
+        cwd: String,
+        status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<i64>,
+        created_at: i64,
+    },
+}
+
+impl TimelineItem {
+    fn id(&self) -> &str {
+        match self {
+            Self::Message { id, .. } | Self::Command { id, .. } => id,
+        }
+    }
+
+    fn created_at(&self) -> i64 {
+        match self {
+            Self::Message { created_at, .. } | Self::Command { created_at, .. } => *created_at,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -32,7 +65,7 @@ pub struct Session {
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_turn_id: Option<String>,
-    pub messages: Vec<Message>,
+    pub messages: Vec<TimelineItem>,
     pub token_usage: TokenUsage,
     pub history_loaded: bool,
 }
@@ -160,21 +193,21 @@ pub fn apply_turn_history(session: &mut Session, turns: &[Value]) {
 
 pub fn merge_turn_history(session: &mut Session, turns: &[Value]) {
     let (messages, active_turn_id) = messages_from_turns(session.updated_at, turns);
-    let refreshed_ids: HashSet<&str> = messages.iter().map(|message| message.id.as_str()).collect();
+    let refreshed_ids: HashSet<&str> = messages.iter().map(TimelineItem::id).collect();
     session
         .messages
-        .retain(|message| !refreshed_ids.contains(message.id.as_str()));
+        .retain(|message| !refreshed_ids.contains(message.id()));
     session.messages.extend(messages);
     session.messages.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
-            .then(left.id.cmp(&right.id))
+        left.created_at()
+            .cmp(&right.created_at())
+            .then(left.id().cmp(right.id()))
     });
     session.active_turn_id = active_turn_id;
     session.history_loaded = true;
 }
 
-fn messages_from_turns(updated_at: i64, turns: &[Value]) -> (Vec<Message>, Option<String>) {
+fn messages_from_turns(updated_at: i64, turns: &[Value]) -> (Vec<TimelineItem>, Option<String>) {
     let mut messages = Vec::new();
     let mut active_turn_id = None;
 
@@ -197,45 +230,91 @@ fn messages_from_turns(updated_at: i64, turns: &[Value]) -> (Vec<Message>, Optio
             .flatten()
             .enumerate()
         {
-            let item_type = item.get("type").and_then(Value::as_str);
-            let (role, text) = match item_type {
-                Some("userMessage") => ("user", user_message_text(item)),
-                Some("agentMessage") => (
-                    "assistant",
-                    item.get("text")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned(),
-                ),
-                Some("plan") => (
-                    "assistant",
-                    item.get("text")
-                        .and_then(Value::as_str)
-                        .map(|text| format!("Plan\n{text}"))
-                        .unwrap_or_default(),
-                ),
-                _ => continue,
-            };
-
-            if text.trim().is_empty() {
-                continue;
-            }
             let item_id = item
                 .get("id")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 .unwrap_or_else(|| index.to_string());
-            messages.push(Message {
-                id: format!("{turn_id}:{item_id}"),
-                role: role.to_owned(),
-                text,
-                created_at: started_at + index as i64,
-                streaming: None,
-            });
+            let id = format!("{turn_id}:{item_id}");
+            let created_at = started_at + index as i64;
+            match item.get("type").and_then(Value::as_str) {
+                Some("userMessage") => push_message(
+                    &mut messages,
+                    id,
+                    "user",
+                    user_message_text(item),
+                    created_at,
+                ),
+                Some("agentMessage") => push_message(
+                    &mut messages,
+                    id,
+                    "assistant",
+                    item.get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    created_at,
+                ),
+                Some("plan") => push_message(
+                    &mut messages,
+                    id,
+                    "assistant",
+                    item.get("text")
+                        .and_then(Value::as_str)
+                        .map(|text| format!("Plan\n{text}"))
+                        .unwrap_or_default(),
+                    created_at,
+                ),
+                Some("commandExecution") => messages.push(TimelineItem::Command {
+                    id,
+                    command: item
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    cwd: item
+                        .get("cwd")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    status: item
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or("completed")
+                        .to_owned(),
+                    output: item
+                        .get("aggregatedOutput")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    exit_code: item.get("exitCode").and_then(Value::as_i64),
+                    duration_ms: item.get("durationMs").and_then(Value::as_i64),
+                    created_at,
+                }),
+                _ => {}
+            }
         }
     }
 
     (messages, active_turn_id)
+}
+
+fn push_message(
+    items: &mut Vec<TimelineItem>,
+    id: String,
+    role: &str,
+    text: String,
+    created_at: i64,
+) {
+    if text.trim().is_empty() {
+        return;
+    }
+    items.push(TimelineItem::Message {
+        id,
+        role: role.to_owned(),
+        text,
+        created_at,
+        streaming: None,
+    });
 }
 
 fn user_message_text(item: &Value) -> String {
@@ -294,6 +373,7 @@ mod tests {
                     { "type": "localImage", "path": "/tmp/image.png" }
                 ]},
                 { "type": "reasoning", "id": "reasoning-1", "summary": [], "content": [] },
+                { "type": "commandExecution", "id": "command-1", "command": "npm test", "cwd": "/tmp", "status": "completed", "aggregatedOutput": "1 passed", "exitCode": 0, "durationMs": 420 },
                 { "type": "agentMessage", "id": "agent-1", "text": "Hi there" }
             ]
         }]);
@@ -302,16 +382,23 @@ mod tests {
 
         assert!(session.history_loaded);
         assert_eq!(session.active_turn_id.as_deref(), Some("turn-1"));
-        assert_eq!(session.messages.len(), 2);
-        assert_eq!(session.messages[0].text, "Hello\n[Image]");
-        assert_eq!(session.messages[1].role, "assistant");
+        assert_eq!(session.messages.len(), 3);
+        assert!(
+            matches!(&session.messages[0], TimelineItem::Message { text, .. } if text == "Hello\n[Image]")
+        );
+        assert!(
+            matches!(&session.messages[1], TimelineItem::Command { command, output, exit_code: Some(0), .. } if command == "npm test" && output.as_deref() == Some("1 passed"))
+        );
+        assert!(
+            matches!(&session.messages[2], TimelineItem::Message { role, .. } if role == "assistant")
+        );
     }
 
     #[test]
     fn merges_refreshed_turn_items_without_losing_older_history() {
         let mut session = session();
         session.history_loaded = true;
-        session.messages = vec![Message {
+        session.messages = vec![TimelineItem::Message {
             id: "old-agent".into(),
             role: "assistant".into(),
             text: "Older response".into(),
@@ -332,8 +419,47 @@ mod tests {
         merge_turn_history(&mut session, turns.as_array().unwrap());
 
         assert_eq!(session.messages.len(), 3);
-        assert_eq!(session.messages[0].id, "old-agent");
-        assert_eq!(session.messages[2].text, "Latest response");
+        assert_eq!(session.messages[0].id(), "old-agent");
+        assert!(
+            matches!(&session.messages[2], TimelineItem::Message { text, .. } if text == "Latest response")
+        );
         assert_eq!(session.active_turn_id, None);
+    }
+
+    #[test]
+    fn updates_a_running_command_in_place() {
+        let mut session = session();
+        let running = json!([{
+            "id": "turn-command",
+            "status": "inProgress",
+            "startedAt": 1_700_000_001,
+            "items": [{
+                "type": "commandExecution", "id": "command-1", "command": "cargo test",
+                "cwd": "/tmp", "status": "inProgress", "aggregatedOutput": "running", "exitCode": null, "durationMs": null
+            }]
+        }]);
+        let completed = json!([{
+            "id": "turn-command",
+            "status": "completed",
+            "startedAt": 1_700_000_001,
+            "items": [{
+                "type": "commandExecution", "id": "command-1", "command": "cargo test",
+                "cwd": "/tmp", "status": "completed", "aggregatedOutput": "ok", "exitCode": 0, "durationMs": 500
+            }]
+        }]);
+
+        apply_turn_history(&mut session, running.as_array().unwrap());
+        merge_turn_history(&mut session, completed.as_array().unwrap());
+
+        assert_eq!(session.messages.len(), 1);
+        assert!(
+            matches!(&session.messages[0], TimelineItem::Command { status, output, exit_code: Some(0), .. } if status == "completed" && output.as_deref() == Some("ok"))
+        );
+        let serialized = serde_json::to_value(&session.messages[0]).unwrap();
+        assert_eq!(
+            serialized.get("type").and_then(Value::as_str),
+            Some("command")
+        );
+        assert_eq!(serialized.get("exitCode").and_then(Value::as_i64), Some(0));
     }
 }

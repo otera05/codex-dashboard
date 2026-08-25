@@ -10,11 +10,12 @@ const demoSnapshot: DashboardSnapshot = {
       tokenUsage: { input: 18_420, output: 5_280, cached: 12_700 },
       historyLoaded: true,
       messages: [
-        { id: "m1", role: "user", text: "Build the session monitoring dashboard and connect it to Codex App Server.", createdAt: Date.now() - 240_000 },
-        { id: "m2", role: "assistant", text: "I’m wiring the live event stream into the session workspace. The sidebar and account usage are ready.", createdAt: Date.now() - 60_000 },
+        { type: "message", id: "m1", role: "user", text: "Build the session monitoring dashboard and connect it to Codex App Server.", createdAt: Date.now() - 240_000 },
+        { type: "command", id: "c1", command: "npm test", cwd: "~/Projects/codex-dashboard", status: "completed", output: "Test Files  6 passed (6)\nTests  9 passed (9)", exitCode: 0, durationMs: 842, createdAt: Date.now() - 90_000 },
+        { type: "message", id: "m2", role: "assistant", text: "I’m wiring the live event stream into the session workspace. The sidebar and account usage are ready.", createdAt: Date.now() - 60_000 },
       ],
     },
-    { id: "demo-2", title: "Authentication flow", cwd: "~/Projects/codex-dashboard", status: "waiting", updatedAt: Date.now() - 480_000, model: "gpt-5.6-codex", tokenUsage: { input: 8_130, output: 2_020, cached: 4_100 }, historyLoaded: true, messages: [{ id: "m3", role: "assistant", text: "Waiting for approval to open the ChatGPT sign-in page.", createdAt: Date.now() - 480_000 }] },
+    { id: "demo-2", title: "Authentication flow", cwd: "~/Projects/codex-dashboard", status: "waiting", updatedAt: Date.now() - 480_000, model: "gpt-5.6-codex", tokenUsage: { input: 8_130, output: 2_020, cached: 4_100 }, historyLoaded: true, messages: [{ type: "message", id: "m3", role: "assistant", text: "Waiting for approval to open the ChatGPT sign-in page.", createdAt: Date.now() - 480_000 }] },
     { id: "demo-3", title: "Update documentation", cwd: "~/Projects/sdk", status: "idle", updatedAt: Date.now() - 7_200_000, model: "gpt-5.5", tokenUsage: { input: 3_240, output: 920, cached: 0 }, historyLoaded: true, messages: [] },
   ],
 };
