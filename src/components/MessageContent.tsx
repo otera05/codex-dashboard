@@ -1,31 +1,7 @@
 import { Check, Copy } from "lucide-react";
-import { Fragment, useState } from "react";
-
-interface ContentPart {
-  type: "text" | "code";
-  value: string;
-  language?: string;
-}
-
-export function parseMessageContent(text: string): ContentPart[] {
-  const parts: ContentPart[] = [];
-  const fence = /```([^\n`]*)\r?\n([\s\S]*?)```/g;
-  let cursor = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = fence.exec(text)) !== null) {
-    if (match.index > cursor) parts.push({ type: "text", value: text.slice(cursor, match.index) });
-    parts.push({
-      type: "code",
-      language: match[1].trim() || undefined,
-      value: match[2].replace(/\r\n/g, "\n").replace(/\n$/, ""),
-    });
-    cursor = match.index + match[0].length;
-  }
-
-  if (cursor < text.length) parts.push({ type: "text", value: text.slice(cursor) });
-  return parts.length ? parts : [{ type: "text", value: text }];
-}
+import { Children, isValidElement, type ReactNode, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 function CodeBlock({ code, language }: { code: string; language?: string }) {
   const [copied, setCopied] = useState(false);
@@ -51,10 +27,24 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
   </div>;
 }
 
+function MarkdownPre({ children }: { children?: ReactNode }) {
+  const child = Children.toArray(children)[0];
+  if (!isValidElement<{ className?: string; children?: ReactNode }>(child)) return <pre>{children}</pre>;
+
+  const language = child.props.className?.match(/language-([\w+-]+)/)?.[1];
+  const code = String(child.props.children ?? "").replace(/\n$/, "");
+  return <CodeBlock code={code} language={language} />;
+}
+
 export function MessageContent({ text }: { text: string }) {
   return <div className="message-content">
-    {parseMessageContent(text).map((part, index) => <Fragment key={`${part.type}-${index}`}>
-      {part.type === "code" ? <CodeBlock code={part.value} language={part.language} /> : part.value && <p>{part.value}</p>}
-    </Fragment>)}
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        pre: MarkdownPre,
+        code: ({ className, children, ...props }) => <code className={["inline-code", className].filter(Boolean).join(" ")} {...props}>{children}</code>,
+        a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>,
+      }}
+    >{text}</ReactMarkdown>
   </div>;
 }
