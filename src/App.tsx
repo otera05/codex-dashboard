@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, ArrowUp, Bot, CircleStop, Clock3, Folder, Gauge, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Search, Settings, Sparkles, Unplug, UserRound } from "lucide-react";
-import { getSnapshot, interruptTurn, sendTurn, startLogin, subscribe } from "./lib/bridge";
+import { Activity, ArrowUp, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Search, Settings, Sparkles, Unplug, UserRound } from "lucide-react";
+import { getSession, getSnapshot, interruptTurn, sendTurn, startLogin, subscribe } from "./lib/bridge";
 import { useDashboard } from "./store";
 import type { Session, SessionStatus } from "./types";
 
@@ -46,7 +46,7 @@ function relativeReset(timestamp: number) {
   return minutes >= 60 ? `in ${Math.floor(minutes / 60)}h ${minutes % 60}m` : `in ${minutes}m`;
 }
 
-function Workspace({ session }: { session?: Session }) {
+function Workspace({ session, loading, error }: { session?: Session; loading: boolean; error?: string }) {
   const [draft, setDraft] = useState("");
   if (!session) return <main className="workspace empty"><Bot size={34} /><h2>Select a session</h2><p>Choose a Codex session from the sidebar.</p></main>;
   const submit = async () => {
@@ -62,7 +62,7 @@ function Workspace({ session }: { session?: Session }) {
     </header>
     <section className="conversation">
       <div className="session-intro"><div className="intro-icon"><Bot size={20} /></div><div><h2>{session.title}</h2><p>Started with {session.model}</p></div></div>
-      {session.messages.length ? session.messages.map((message) => <article className={`message ${message.role}`} key={message.id}>
+      {loading ? <div className="history-state"><LoaderCircle size={19} /> Loading session history…</div> : error ? <div className="history-state error">{error}</div> : session.messages.length ? session.messages.map((message) => <article className={`message ${message.role}`} key={message.id}>
         <div className="message-avatar">{message.role === "assistant" ? <Sparkles size={15} /> : <UserRound size={15} />}</div>
         <div><div className="message-meta"><strong>{message.role === "assistant" ? "Codex" : "You"}</strong><span>{relativeTime(message.createdAt)}</span></div><p>{message.text}</p>{message.streaming && <span className="cursor" />}</div>
       </article>) : <div className="no-messages">This session has no messages yet.</div>}
@@ -87,8 +87,15 @@ function SettingsView() {
 }
 
 export function App() {
-  const { sessions, selectedId, settingsOpen, hydrate, applyEvent } = useDashboard();
+  const { sessions, selectedId, settingsOpen, connected, loadingSessionId, sessionError, hydrate, applyEvent, mergeSession, setSessionLoading } = useDashboard();
   useEffect(() => { let unsubscribe: () => void = () => undefined; void getSnapshot().then((snapshot) => hydrate(snapshot.sessions, snapshot.account, snapshot.connected)); void subscribe(applyEvent).then((fn) => { unsubscribe = fn; }); return () => unsubscribe(); }, [hydrate, applyEvent]);
   const session = useMemo(() => sessions.find((item) => item.id === selectedId), [sessions, selectedId]);
-  return <div className="app-shell"><Sidebar />{settingsOpen ? <SettingsView /> : <Workspace session={session} />}</div>;
+  useEffect(() => {
+    if (!selectedId || !connected || session?.historyLoaded || loadingSessionId === selectedId) return;
+    let active = true;
+    setSessionLoading(selectedId);
+    void getSession(selectedId).then((loaded) => { if (active) mergeSession(loaded); }).catch((error: unknown) => { if (active) setSessionLoading(undefined, error instanceof Error ? error.message : String(error)); });
+    return () => { active = false; };
+  }, [selectedId, connected, session?.historyLoaded, loadingSessionId, mergeSession, setSessionLoading]);
+  return <div className="app-shell"><Sidebar />{settingsOpen ? <SettingsView /> : <Workspace session={session} loading={loadingSessionId === selectedId} error={sessionError} />}</div>;
 }

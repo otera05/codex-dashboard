@@ -2,7 +2,7 @@ mod app_server;
 mod models;
 
 use app_server::{AppServer, AppServerError};
-use models::DashboardSnapshot;
+use models::{DashboardSnapshot, Session};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tauri::State;
@@ -12,6 +12,14 @@ async fn get_dashboard_snapshot(
     server: State<'_, Arc<AppServer>>,
 ) -> Result<DashboardSnapshot, AppServerError> {
     Ok(server.snapshot.read().await.clone())
+}
+
+#[tauri::command]
+async fn get_session(
+    server: State<'_, Arc<AppServer>>,
+    thread_id: String,
+) -> Result<Session, AppServerError> {
+    server.load_session(&thread_id).await
 }
 
 #[tauri::command]
@@ -76,6 +84,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_dashboard_snapshot,
+            get_session,
             send_turn,
             interrupt_turn,
             start_chatgpt_login

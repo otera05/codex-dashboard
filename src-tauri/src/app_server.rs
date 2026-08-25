@@ -16,7 +16,9 @@ use tokio::{
     sync::{oneshot, Mutex, RwLock},
 };
 
-use crate::models::{parse_account, parse_sessions, DashboardSnapshot, RpcEnvelope};
+use crate::models::{
+    apply_turn_history, parse_account, parse_sessions, DashboardSnapshot, RpcEnvelope, Session,
+};
 
 #[derive(Debug, Error)]
 pub enum AppServerError {
@@ -133,6 +135,45 @@ impl AppServer {
         receiver.await.map_err(|_| AppServerError::Disconnected)?
     }
 
+    pub async fn load_session(&self, thread_id: &str) -> Result<Session, AppServerError> {
+        let mut turns = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        for _ in 0..10 {
+            let response = self
+                .request(
+                    "thread/turns/list",
+                    json!({
+                        "threadId": thread_id,
+                        "cursor": cursor,
+                        "limit": 100,
+                        "sortDirection": "asc",
+                        "itemsView": "full"
+                    }),
+                )
+                .await?;
+            if let Some(page) = response.get("data").and_then(Value::as_array) {
+                turns.extend(page.iter().cloned());
+            }
+            cursor = response
+                .get("nextCursor")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        let mut snapshot = self.snapshot.write().await;
+        let session = snapshot
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == thread_id)
+            .ok_or_else(|| AppServerError::Rpc(format!("Session {thread_id} was not found")))?;
+        apply_turn_history(session, &turns);
+        Ok(session.clone())
+    }
+
     async fn write_notification(&self, method: &str, params: Value) -> Result<(), AppServerError> {
         let message =
             serde_json::to_string(&json!({ "jsonrpc": "2.0", "method": method, "params": params }))
@@ -164,7 +205,20 @@ impl AppServer {
             .await
             .unwrap_or(Value::Null);
         let mut snapshot = self.snapshot.write().await;
-        snapshot.sessions = parse_sessions(&threads);
+        let mut sessions = parse_sessions(&threads);
+        for session in &mut sessions {
+            if let Some(previous) = snapshot
+                .sessions
+                .iter()
+                .find(|previous| previous.id == session.id && previous.history_loaded)
+            {
+                session.messages.clone_from(&previous.messages);
+                session.token_usage.clone_from(&previous.token_usage);
+                session.active_turn_id.clone_from(&previous.active_turn_id);
+                session.history_loaded = true;
+            }
+        }
+        snapshot.sessions = sessions;
         snapshot.account = parse_account(&account_result, &rates);
         snapshot.connected = true;
         let _ = app.emit(

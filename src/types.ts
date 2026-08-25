@@ -10,6 +10,7 @@ export interface Session {
   activeTurnId?: string;
   messages: Message[];
   tokenUsage: { input: number; output: number; cached: number };
+  historyLoaded?: boolean;
 }
 
 export interface Message {
