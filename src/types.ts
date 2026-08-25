@@ -34,7 +34,24 @@ export interface CommandActivity {
   createdAt: number;
 }
 
-export type TimelineItem = Message | CommandActivity;
+export interface FileChange {
+  path: string;
+  kind: "add" | "update" | "delete";
+  movePath?: string;
+  diff: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface FileChangeActivity {
+  type: "fileChange";
+  id: string;
+  status: "inProgress" | "completed" | "failed" | "declined";
+  changes: FileChange[];
+  createdAt: number;
+}
+
+export type TimelineItem = Message | CommandActivity | FileChangeActivity;
 
 export interface Account {
   connected: boolean;

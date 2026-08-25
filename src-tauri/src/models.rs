@@ -38,18 +38,38 @@ pub enum TimelineItem {
         duration_ms: Option<i64>,
         created_at: i64,
     },
+    FileChange {
+        id: String,
+        status: String,
+        changes: Vec<FileChange>,
+        created_at: i64,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChange {
+    path: String,
+    kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    move_path: Option<String>,
+    diff: String,
+    additions: usize,
+    deletions: usize,
 }
 
 impl TimelineItem {
     fn id(&self) -> &str {
         match self {
-            Self::Message { id, .. } | Self::Command { id, .. } => id,
+            Self::Message { id, .. } | Self::Command { id, .. } | Self::FileChange { id, .. } => id,
         }
     }
 
     fn created_at(&self) -> i64 {
         match self {
-            Self::Message { created_at, .. } | Self::Command { created_at, .. } => *created_at,
+            Self::Message { created_at, .. }
+            | Self::Command { created_at, .. }
+            | Self::FileChange { created_at, .. } => *created_at,
         }
     }
 }
@@ -290,12 +310,69 @@ fn messages_from_turns(updated_at: i64, turns: &[Value]) -> (Vec<TimelineItem>, 
                     duration_ms: item.get("durationMs").and_then(Value::as_i64),
                     created_at,
                 }),
+                Some("fileChange") => messages.push(TimelineItem::FileChange {
+                    id,
+                    status: item
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or("completed")
+                        .to_owned(),
+                    changes: file_changes(item),
+                    created_at,
+                }),
                 _ => {}
             }
         }
     }
 
     (messages, active_turn_id)
+}
+
+fn file_changes(item: &Value) -> Vec<FileChange> {
+    item.get("changes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|change| {
+            let diff = change
+                .get("diff")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let (additions, deletions) = diff_stats(&diff);
+            FileChange {
+                path: change
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                kind: change
+                    .pointer("/kind/type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("update")
+                    .to_owned(),
+                move_path: change
+                    .pointer("/kind/move_path")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                diff,
+                additions,
+                deletions,
+            }
+        })
+        .collect()
+}
+
+fn diff_stats(diff: &str) -> (usize, usize) {
+    diff.lines().fold((0, 0), |(additions, deletions), line| {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            (additions + 1, deletions)
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            (additions, deletions + 1)
+        } else {
+            (additions, deletions)
+        }
+    })
 }
 
 fn push_message(
@@ -374,6 +451,10 @@ mod tests {
                 ]},
                 { "type": "reasoning", "id": "reasoning-1", "summary": [], "content": [] },
                 { "type": "commandExecution", "id": "command-1", "command": "npm test", "cwd": "/tmp", "status": "completed", "aggregatedOutput": "1 passed", "exitCode": 0, "durationMs": 420 },
+                { "type": "fileChange", "id": "change-1", "status": "completed", "changes": [{
+                    "path": "src/App.tsx", "kind": { "type": "update", "move_path": null },
+                    "diff": "--- a/src/App.tsx\n+++ b/src/App.tsx\n@@ -1 +1 @@\n-old\n+new"
+                }]},
                 { "type": "agentMessage", "id": "agent-1", "text": "Hi there" }
             ]
         }]);
@@ -382,7 +463,7 @@ mod tests {
 
         assert!(session.history_loaded);
         assert_eq!(session.active_turn_id.as_deref(), Some("turn-1"));
-        assert_eq!(session.messages.len(), 3);
+        assert_eq!(session.messages.len(), 4);
         assert!(
             matches!(&session.messages[0], TimelineItem::Message { text, .. } if text == "Hello\n[Image]")
         );
@@ -390,8 +471,14 @@ mod tests {
             matches!(&session.messages[1], TimelineItem::Command { command, output, exit_code: Some(0), .. } if command == "npm test" && output.as_deref() == Some("1 passed"))
         );
         assert!(
-            matches!(&session.messages[2], TimelineItem::Message { role, .. } if role == "assistant")
+            matches!(&session.messages[2], TimelineItem::FileChange { changes, .. } if changes.len() == 1 && changes[0].additions == 1 && changes[0].deletions == 1)
         );
+        assert!(
+            matches!(&session.messages[3], TimelineItem::Message { role, .. } if role == "assistant")
+        );
+        let serialized = serde_json::to_value(&session.messages[2]).unwrap();
+        assert_eq!(serialized["changes"][0]["kind"], "update");
+        assert_eq!(serialized["changes"][0]["additions"], 1);
     }
 
     #[test]

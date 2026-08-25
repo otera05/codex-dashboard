@@ -3,6 +3,7 @@ import { Activity, ArrowUp, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle
 import { getSession, getSnapshot, interruptTurn, sendTurn, startLogin, subscribe } from "./lib/bridge";
 import { MessageContent } from "./components/MessageContent";
 import { CommandActivity } from "./components/CommandActivity";
+import { FileChangeActivity } from "./components/FileChangeActivity";
 import { useSessionSync } from "./hooks/useSessionSync";
 import { useSessionListSync } from "./hooks/useSessionListSync";
 import { useDashboard } from "./store";
@@ -54,7 +55,11 @@ function Workspace({ session, loading, error }: { session?: Session; loading: bo
   const [draft, setDraft] = useState("");
   const conversationRef = useRef<HTMLElement>(null);
   const followLatest = useRef(true);
-  const messageVersion = session?.messages.map((item) => item.type === "message" ? `${item.id}:${item.text.length}` : `${item.id}:${item.status}:${item.output?.length ?? 0}`).join("|");
+  const messageVersion = session?.messages.map((item) => {
+    if (item.type === "message") return `${item.id}:${item.text.length}`;
+    if (item.type === "command") return `${item.id}:${item.status}:${item.output?.length ?? 0}`;
+    return `${item.id}:${item.status}:${item.changes.map((change) => `${change.path}:${change.diff.length}`).join(",")}`;
+  }).join("|");
 
   useEffect(() => {
     const conversation = conversationRef.current;
@@ -78,7 +83,7 @@ function Workspace({ session, loading, error }: { session?: Session; loading: bo
       followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
     }}>
       <div className="session-intro"><div className="intro-icon"><Bot size={20} /></div><div><h2>{session.title}</h2><p>Started with {session.model}</p></div></div>
-      {loading ? <div className="history-state"><LoaderCircle size={19} /> Loading session history…</div> : error ? <div className="history-state error">{error}</div> : session.messages.length ? session.messages.map((item) => item.type === "command" ? <CommandActivity key={item.id} item={item} /> : <article className={`message ${item.role}`} key={item.id}>
+      {loading ? <div className="history-state"><LoaderCircle size={19} /> Loading session history…</div> : error ? <div className="history-state error">{error}</div> : session.messages.length ? session.messages.map((item) => item.type === "command" ? <CommandActivity key={item.id} item={item} /> : item.type === "fileChange" ? <FileChangeActivity key={item.id} item={item} /> : <article className={`message ${item.role}`} key={item.id}>
         <div className="message-avatar">{item.role === "assistant" ? <Sparkles size={15} /> : <UserRound size={15} />}</div>
         <div className="message-body"><div className="message-meta"><strong>{item.role === "assistant" ? "Codex" : "You"}</strong><span>{relativeTime(item.createdAt)}</span></div><MessageContent text={item.text} />{item.streaming && <span className="cursor" />}</div>
       </article>) : <div className="no-messages">This session has no messages yet.</div>}

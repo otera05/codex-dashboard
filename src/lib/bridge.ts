@@ -12,6 +12,7 @@ const demoSnapshot: DashboardSnapshot = {
       messages: [
         { type: "message", id: "m1", role: "user", text: "Build the session monitoring dashboard and connect it to Codex App Server.", createdAt: Date.now() - 240_000 },
         { type: "command", id: "c1", command: "npm test", cwd: "~/Projects/codex-dashboard", status: "completed", output: "Test Files  6 passed (6)\nTests  9 passed (9)", exitCode: 0, durationMs: 842, createdAt: Date.now() - 90_000 },
+        { type: "fileChange", id: "f1", status: "completed", createdAt: Date.now() - 75_000, changes: [{ path: "src/App.tsx", kind: "update", diff: "--- a/src/App.tsx\n+++ b/src/App.tsx\n@@ -1,2 +1,2 @@\n-old dashboard\n+realtime dashboard", additions: 1, deletions: 1 }] },
         { type: "message", id: "m2", role: "assistant", text: "I’m wiring the live event stream into the session workspace. The sidebar and account usage are ready.", createdAt: Date.now() - 60_000 },
       ],
     },
