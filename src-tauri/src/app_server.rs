@@ -17,7 +17,8 @@ use tokio::{
 };
 
 use crate::models::{
-    apply_turn_history, parse_account, parse_sessions, DashboardSnapshot, RpcEnvelope, Session,
+    apply_turn_history, merge_turn_history, parse_account, parse_sessions, DashboardSnapshot,
+    RpcEnvelope, Session,
 };
 
 #[derive(Debug, Error)]
@@ -171,6 +172,45 @@ impl AppServer {
             .find(|session| session.id == thread_id)
             .ok_or_else(|| AppServerError::Rpc(format!("Session {thread_id} was not found")))?;
         apply_turn_history(session, &turns);
+        Ok(session.clone())
+    }
+
+    pub async fn refresh_session(&self, thread_id: &str) -> Result<Session, AppServerError> {
+        let response = self
+            .request(
+                "thread/turns/list",
+                json!({
+                    "threadId": thread_id,
+                    "limit": 20,
+                    "sortDirection": "desc",
+                    "itemsView": "full"
+                }),
+            )
+            .await?;
+        let mut turns = response
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        turns.sort_by_key(|turn| {
+            (
+                turn.get("startedAt")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default(),
+                turn.get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        });
+
+        let mut snapshot = self.snapshot.write().await;
+        let session = snapshot
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == thread_id)
+            .ok_or_else(|| AppServerError::Rpc(format!("Session {thread_id} was not found")))?;
+        merge_turn_history(session, &turns);
         Ok(session.clone())
     }
 

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowUp, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Search, Settings, Sparkles, Unplug, UserRound } from "lucide-react";
 import { getSession, getSnapshot, interruptTurn, sendTurn, startLogin, subscribe } from "./lib/bridge";
 import { MessageContent } from "./components/MessageContent";
+import { useSessionSync } from "./hooks/useSessionSync";
 import { useDashboard } from "./store";
 import type { Session, SessionStatus } from "./types";
 
@@ -49,6 +50,15 @@ function relativeReset(timestamp: number) {
 
 function Workspace({ session, loading, error }: { session?: Session; loading: boolean; error?: string }) {
   const [draft, setDraft] = useState("");
+  const conversationRef = useRef<HTMLElement>(null);
+  const followLatest = useRef(true);
+  const messageVersion = session?.messages.map((message) => `${message.id}:${message.text.length}`).join("|");
+
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    if (conversation && followLatest.current) conversation.scrollTop = conversation.scrollHeight;
+  }, [session?.id, messageVersion]);
+
   if (!session) return <main className="workspace empty"><Bot size={34} /><h2>Select a session</h2><p>Choose a Codex session from the sidebar.</p></main>;
   const submit = async () => {
     const value = draft.trim();
@@ -61,7 +71,10 @@ function Workspace({ session, loading, error }: { session?: Session; loading: bo
       <div><div className="title-line"><h1>{session.title}</h1><span className={`status-pill ${session.status}`}><i />{statusLabel[session.status]}</span></div><p><Folder size={13} /> {session.cwd}</p></div>
       <div className="header-actions"><button className="subtle-button"><Activity size={15} /> Activity</button><button className="icon-button"><MoreHorizontal size={18} /></button></div>
     </header>
-    <section className="conversation">
+    <section className="conversation" ref={conversationRef} onScroll={(event) => {
+      const element = event.currentTarget;
+      followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+    }}>
       <div className="session-intro"><div className="intro-icon"><Bot size={20} /></div><div><h2>{session.title}</h2><p>Started with {session.model}</p></div></div>
       {loading ? <div className="history-state"><LoaderCircle size={19} /> Loading session history…</div> : error ? <div className="history-state error">{error}</div> : session.messages.length ? session.messages.map((message) => <article className={`message ${message.role}`} key={message.id}>
         <div className="message-avatar">{message.role === "assistant" ? <Sparkles size={15} /> : <UserRound size={15} />}</div>
@@ -98,5 +111,6 @@ export function App() {
     void getSession(selectedId).then((loaded) => { if (active) mergeSession(loaded); }).catch((error: unknown) => { if (active) setSessionLoading(undefined, error instanceof Error ? error.message : String(error)); });
     return () => { active = false; };
   }, [selectedId, connected, session?.historyLoaded, mergeSession, setSessionLoading]);
+  useSessionSync({ threadId: selectedId, enabled: connected && Boolean(session?.historyLoaded), onSession: mergeSession });
   return <div className="app-shell"><Sidebar />{settingsOpen ? <SettingsView /> : <Workspace session={session} loading={loadingSessionId === selectedId} error={sessionError} />}</div>;
 }

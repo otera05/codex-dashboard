@@ -37,6 +37,12 @@ export async function getSession(threadId: string): Promise<Session> {
   return invoke<Session>("get_session", { threadId });
 }
 
+export async function refreshSession(threadId: string): Promise<Session> {
+  if (!isTauri()) return getSession(threadId);
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Session>("refresh_session", { threadId });
+}
+
 export async function sendTurn(threadId: string, text: string): Promise<void> {
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");

@@ -23,6 +23,14 @@ async fn get_session(
 }
 
 #[tauri::command]
+async fn refresh_session(
+    server: State<'_, Arc<AppServer>>,
+    thread_id: String,
+) -> Result<Session, AppServerError> {
+    server.refresh_session(&thread_id).await
+}
+
+#[tauri::command]
 async fn send_turn(
     server: State<'_, Arc<AppServer>>,
     thread_id: String,
@@ -85,6 +93,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_dashboard_snapshot,
             get_session,
+            refresh_session,
             send_turn,
             interrupt_turn,
             start_chatgpt_login

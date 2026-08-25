@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -151,6 +152,29 @@ pub fn parse_sessions(value: &Value) -> Vec<Session> {
 }
 
 pub fn apply_turn_history(session: &mut Session, turns: &[Value]) {
+    let (messages, active_turn_id) = messages_from_turns(session.updated_at, turns);
+    session.messages = messages;
+    session.active_turn_id = active_turn_id;
+    session.history_loaded = true;
+}
+
+pub fn merge_turn_history(session: &mut Session, turns: &[Value]) {
+    let (messages, active_turn_id) = messages_from_turns(session.updated_at, turns);
+    let refreshed_ids: HashSet<&str> = messages.iter().map(|message| message.id.as_str()).collect();
+    session
+        .messages
+        .retain(|message| !refreshed_ids.contains(message.id.as_str()));
+    session.messages.extend(messages);
+    session.messages.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then(left.id.cmp(&right.id))
+    });
+    session.active_turn_id = active_turn_id;
+    session.history_loaded = true;
+}
+
+fn messages_from_turns(updated_at: i64, turns: &[Value]) -> (Vec<Message>, Option<String>) {
     let mut messages = Vec::new();
     let mut active_turn_id = None;
 
@@ -159,7 +183,7 @@ pub fn apply_turn_history(session: &mut Session, turns: &[Value]) {
         let started_at = turn
             .get("startedAt")
             .and_then(Value::as_i64)
-            .unwrap_or(session.updated_at / 1000)
+            .unwrap_or(updated_at / 1000)
             * 1000;
 
         if turn.get("status").and_then(Value::as_str) == Some("inProgress") {
@@ -196,12 +220,13 @@ pub fn apply_turn_history(session: &mut Session, turns: &[Value]) {
             if text.trim().is_empty() {
                 continue;
             }
+            let item_id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| index.to_string());
             messages.push(Message {
-                id: item
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("{turn_id}-{index}")),
+                id: format!("{turn_id}:{item_id}"),
                 role: role.to_owned(),
                 text,
                 created_at: started_at + index as i64,
@@ -210,9 +235,7 @@ pub fn apply_turn_history(session: &mut Session, turns: &[Value]) {
         }
     }
 
-    session.messages = messages;
-    session.active_turn_id = active_turn_id;
-    session.history_loaded = true;
+    (messages, active_turn_id)
 }
 
 fn user_message_text(item: &Value) -> String {
@@ -282,5 +305,35 @@ mod tests {
         assert_eq!(session.messages.len(), 2);
         assert_eq!(session.messages[0].text, "Hello\n[Image]");
         assert_eq!(session.messages[1].role, "assistant");
+    }
+
+    #[test]
+    fn merges_refreshed_turn_items_without_losing_older_history() {
+        let mut session = session();
+        session.history_loaded = true;
+        session.messages = vec![Message {
+            id: "old-agent".into(),
+            role: "assistant".into(),
+            text: "Older response".into(),
+            created_at: 1_699_999_000_000,
+            streaming: None,
+        }];
+        let turns = json!([{
+            "id": "turn-2",
+            "status": "completed",
+            "startedAt": 1_700_000_001,
+            "items": [
+                { "type": "userMessage", "id": "user-2", "content": [{ "type": "text", "text": "Next", "text_elements": [] }] },
+                { "type": "agentMessage", "id": "agent-2", "text": "Latest response" }
+            ]
+        }]);
+
+        merge_turn_history(&mut session, turns.as_array().unwrap());
+        merge_turn_history(&mut session, turns.as_array().unwrap());
+
+        assert_eq!(session.messages.len(), 3);
+        assert_eq!(session.messages[0].id, "old-agent");
+        assert_eq!(session.messages[2].text, "Latest response");
+        assert_eq!(session.active_turn_id, None);
     }
 }
