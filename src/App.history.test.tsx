@@ -7,6 +7,7 @@ const bridge = vi.hoisted(() => ({
   getSnapshot: vi.fn(),
   getSession: vi.fn(),
   refreshSession: vi.fn(),
+  refreshSessionList: vi.fn(),
   subscribe: vi.fn(),
   sendTurn: vi.fn(),
   interruptTurn: vi.fn(),

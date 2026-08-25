@@ -31,6 +31,13 @@ async fn refresh_session(
 }
 
 #[tauri::command]
+async fn refresh_session_list(
+    server: State<'_, Arc<AppServer>>,
+) -> Result<DashboardSnapshot, AppServerError> {
+    server.reload_sessions().await
+}
+
+#[tauri::command]
 async fn send_turn(
     server: State<'_, Arc<AppServer>>,
     thread_id: String,
@@ -94,6 +101,7 @@ pub fn run() {
             get_dashboard_snapshot,
             get_session,
             refresh_session,
+            refresh_session_list,
             send_turn,
             interrupt_turn,
             start_chatgpt_login

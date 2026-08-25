@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowUp, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Search, Settings, Sparkles, Unplug, UserRound } from "lucide-react";
 import { getSession, getSnapshot, interruptTurn, sendTurn, startLogin, subscribe } from "./lib/bridge";
 import { MessageContent } from "./components/MessageContent";
 import { useSessionSync } from "./hooks/useSessionSync";
+import { useSessionListSync } from "./hooks/useSessionListSync";
 import { useDashboard } from "./store";
-import type { Session, SessionStatus } from "./types";
+import type { DashboardSnapshot, Session, SessionStatus } from "./types";
 
 const statusLabel: Record<SessionStatus, string> = { working: "Working", waiting: "Waiting", idle: "Idle", error: "Error" };
 
@@ -102,6 +103,7 @@ function SettingsView() {
 
 export function App() {
   const { sessions, selectedId, settingsOpen, connected, loadingSessionId, sessionError, hydrate, applyEvent, mergeSession, setSessionLoading } = useDashboard();
+  const applySnapshot = useCallback((snapshot: DashboardSnapshot) => applyEvent({ type: "snapshot", snapshot }), [applyEvent]);
   useEffect(() => { let unsubscribe: () => void = () => undefined; void getSnapshot().then((snapshot) => hydrate(snapshot.sessions, snapshot.account, snapshot.connected)); void subscribe(applyEvent).then((fn) => { unsubscribe = fn; }); return () => unsubscribe(); }, [hydrate, applyEvent]);
   const session = useMemo(() => sessions.find((item) => item.id === selectedId), [sessions, selectedId]);
   useEffect(() => {
@@ -112,5 +114,6 @@ export function App() {
     return () => { active = false; };
   }, [selectedId, connected, session?.historyLoaded, mergeSession, setSessionLoading]);
   useSessionSync({ threadId: selectedId, enabled: connected && Boolean(session?.historyLoaded), onSession: mergeSession });
+  useSessionListSync({ enabled: connected, onSnapshot: applySnapshot });
   return <div className="app-shell"><Sidebar />{settingsOpen ? <SettingsView /> : <Workspace session={session} loading={loadingSessionId === selectedId} error={sessionError} />}</div>;
 }

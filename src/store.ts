@@ -19,7 +19,12 @@ interface DashboardState {
 
 export const useDashboard = create<DashboardState>((set) => ({
   sessions: [], account: { connected: false }, connected: false, settingsOpen: false,
-  hydrate: (sessions, account, connected) => set((state) => ({ sessions, account, connected, selectedId: state.selectedId ?? sessions[0]?.id })),
+  hydrate: (sessions, account, connected) => set((state) => ({
+    sessions,
+    account,
+    connected,
+    selectedId: state.selectedId && sessions.some((session) => session.id === state.selectedId) ? state.selectedId : sessions[0]?.id,
+  })),
   select: (selectedId) => set({ selectedId, settingsOpen: false }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   setSessionLoading: (loadingSessionId, sessionError) => set({ loadingSessionId, sessionError }),
@@ -29,15 +34,18 @@ export const useDashboard = create<DashboardState>((set) => ({
     sessionError: undefined,
   })),
   applyEvent: (event) => set((state) => {
-    if (event.type === "snapshot") return {
-      sessions: event.snapshot.sessions.map((session) => {
+    if (event.type === "snapshot") {
+      const sessions = event.snapshot.sessions.map((session) => {
         const current = state.sessions.find((item) => item.id === session.id);
         return current?.historyLoaded ? { ...session, messages: current.messages, tokenUsage: current.tokenUsage, activeTurnId: current.activeTurnId, historyLoaded: true } : session;
-      }),
-      account: event.snapshot.account,
-      connected: event.snapshot.connected,
-      selectedId: state.selectedId ?? event.snapshot.sessions[0]?.id,
-    };
+      });
+      return {
+        sessions,
+        account: event.snapshot.account,
+        connected: event.snapshot.connected,
+        selectedId: state.selectedId && sessions.some((session) => session.id === state.selectedId) ? state.selectedId : sessions[0]?.id,
+      };
+    }
     if (event.type === "account.updated") return { account: event.account };
     if (event.type === "connection.changed") return { connected: event.connected };
     const exists = state.sessions.some((session) => session.id === event.session.id);

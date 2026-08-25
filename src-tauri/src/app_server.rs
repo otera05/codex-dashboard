@@ -214,6 +214,43 @@ impl AppServer {
         Ok(session.clone())
     }
 
+    pub async fn reload_sessions(&self) -> Result<DashboardSnapshot, AppServerError> {
+        let mut threads = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        for _ in 0..10 {
+            let response = self
+                .request(
+                    "thread/list",
+                    json!({
+                        "cursor": cursor,
+                        "limit": 100,
+                        "sortKey": "updated_at",
+                        "sortDirection": "desc"
+                    }),
+                )
+                .await?;
+            if let Some(page) = response.get("data").and_then(Value::as_array) {
+                threads.extend(page.iter().cloned());
+            }
+            cursor = response
+                .get("nextCursor")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        let mut sessions = parse_sessions(&json!({ "data": threads }));
+        sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        let mut snapshot = self.snapshot.write().await;
+        Self::preserve_loaded_history(&snapshot.sessions, &mut sessions);
+        snapshot.sessions = sessions;
+        snapshot.connected = true;
+        Ok(snapshot.clone())
+    }
+
     async fn write_notification(&self, method: &str, params: Value) -> Result<(), AppServerError> {
         let message =
             serde_json::to_string(&json!({ "jsonrpc": "2.0", "method": method, "params": params }))
@@ -230,12 +267,7 @@ impl AppServer {
     }
 
     async fn refresh(&self, app: &AppHandle) -> Result<(), AppServerError> {
-        let threads = self
-            .request(
-                "thread/list",
-                json!({ "limit": 100, "sortKey": "updated_at" }),
-            )
-            .await?;
+        self.reload_sessions().await?;
         let account_result = self
             .request("account/read", json!({ "refreshToken": false }))
             .await
@@ -245,10 +277,18 @@ impl AppServer {
             .await
             .unwrap_or(Value::Null);
         let mut snapshot = self.snapshot.write().await;
-        let mut sessions = parse_sessions(&threads);
-        for session in &mut sessions {
-            if let Some(previous) = snapshot
-                .sessions
+        snapshot.account = parse_account(&account_result, &rates);
+        snapshot.connected = true;
+        let _ = app.emit(
+            "dashboard-event",
+            json!({ "type": "snapshot", "snapshot": &*snapshot }),
+        );
+        Ok(())
+    }
+
+    fn preserve_loaded_history(previous_sessions: &[Session], sessions: &mut [Session]) {
+        for session in sessions {
+            if let Some(previous) = previous_sessions
                 .iter()
                 .find(|previous| previous.id == session.id && previous.history_loaded)
             {
@@ -258,14 +298,6 @@ impl AppServer {
                 session.history_loaded = true;
             }
         }
-        snapshot.sessions = sessions;
-        snapshot.account = parse_account(&account_result, &rates);
-        snapshot.connected = true;
-        let _ = app.emit(
-            "dashboard-event",
-            json!({ "type": "snapshot", "snapshot": &*snapshot }),
-        );
-        Ok(())
     }
 
     fn notification_requires_refresh(method: &str) -> bool {
