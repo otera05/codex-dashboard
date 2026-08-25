@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, ArrowUp, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Search, Settings, Sparkles, Unplug, UserRound } from "lucide-react";
 import { getSession, getSnapshot, interruptTurn, sendTurn, startLogin, subscribe } from "./lib/bridge";
+import { MessageContent } from "./components/MessageContent";
 import { useDashboard } from "./store";
 import type { Session, SessionStatus } from "./types";
 
@@ -64,7 +65,7 @@ function Workspace({ session, loading, error }: { session?: Session; loading: bo
       <div className="session-intro"><div className="intro-icon"><Bot size={20} /></div><div><h2>{session.title}</h2><p>Started with {session.model}</p></div></div>
       {loading ? <div className="history-state"><LoaderCircle size={19} /> Loading session history…</div> : error ? <div className="history-state error">{error}</div> : session.messages.length ? session.messages.map((message) => <article className={`message ${message.role}`} key={message.id}>
         <div className="message-avatar">{message.role === "assistant" ? <Sparkles size={15} /> : <UserRound size={15} />}</div>
-        <div><div className="message-meta"><strong>{message.role === "assistant" ? "Codex" : "You"}</strong><span>{relativeTime(message.createdAt)}</span></div><p>{message.text}</p>{message.streaming && <span className="cursor" />}</div>
+        <div className="message-body"><div className="message-meta"><strong>{message.role === "assistant" ? "Codex" : "You"}</strong><span>{relativeTime(message.createdAt)}</span></div><MessageContent text={message.text} />{message.streaming && <span className="cursor" />}</div>
       </article>) : <div className="no-messages">This session has no messages yet.</div>}
     </section>
     <footer className="composer-wrap">
