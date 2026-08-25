@@ -61,8 +61,23 @@ export interface Account {
   resetsAt?: number;
 }
 
+export interface ApprovalRequest {
+  requestId: string | number;
+  kind: "command" | "fileChange";
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  startedAt: number;
+  command?: string;
+  cwd?: string;
+  reason?: string;
+  grantRoot?: string;
+  availableDecisions: string[];
+}
+
 export interface DashboardSnapshot {
   sessions: Session[];
+  approvals?: ApprovalRequest[];
   account: Account;
   connected: boolean;
 }
@@ -70,5 +85,7 @@ export interface DashboardSnapshot {
 export type DashboardEvent =
   | { type: "snapshot"; snapshot: DashboardSnapshot }
   | { type: "session.updated"; session: Session }
+  | { type: "approval.requested"; approval: ApprovalRequest }
+  | { type: "approval.resolved"; requestId: string | number }
   | { type: "account.updated"; account: Account }
   | { type: "connection.changed"; connected: boolean };

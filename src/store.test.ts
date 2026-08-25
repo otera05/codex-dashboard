@@ -18,6 +18,7 @@ describe("dashboard session list updates", () => {
   beforeEach(() => {
     useDashboard.setState({
       sessions: [],
+      approvals: [],
       account: { connected: false },
       connected: false,
       selectedId: undefined,
@@ -32,7 +33,7 @@ describe("dashboard session list updates", () => {
 
     useDashboard.getState().applyEvent({
       type: "snapshot",
-      snapshot: { connected: true, account: { connected: true }, sessions: [session("new"), session("existing")] },
+      snapshot: { connected: true, approvals: [], account: { connected: true }, sessions: [session("new"), session("existing")] },
     });
 
     expect(useDashboard.getState().sessions.map(({ id }) => id)).toEqual(["new", "existing"]);
@@ -45,9 +46,28 @@ describe("dashboard session list updates", () => {
 
     useDashboard.getState().applyEvent({
       type: "snapshot",
-      snapshot: { connected: true, account: { connected: true }, sessions: [session("remaining")] },
+      snapshot: { connected: true, approvals: [], account: { connected: true }, sessions: [session("remaining")] },
     });
 
     expect(useDashboard.getState().selectedId).toBe("remaining");
+  });
+
+  it("adds and removes approval requests from live events", () => {
+    const approval = {
+      requestId: 12,
+      kind: "command" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      startedAt: 1,
+      command: "npm install",
+      availableDecisions: ["accept", "decline"],
+    };
+
+    useDashboard.getState().applyEvent({ type: "approval.requested", approval });
+    expect(useDashboard.getState().approvals).toEqual([approval]);
+
+    useDashboard.getState().applyEvent({ type: "approval.resolved", requestId: 12 });
+    expect(useDashboard.getState().approvals).toEqual([]);
   });
 });

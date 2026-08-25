@@ -66,6 +66,16 @@ async fn interrupt_turn(
 }
 
 #[tauri::command]
+async fn resolve_approval(
+    app: tauri::AppHandle,
+    server: State<'_, Arc<AppServer>>,
+    request_id: Value,
+    decision: String,
+) -> Result<(), AppServerError> {
+    server.resolve_approval(&app, request_id, &decision).await
+}
+
+#[tauri::command]
 async fn start_chatgpt_login(
     server: State<'_, Arc<AppServer>>,
 ) -> Result<Option<String>, AppServerError> {
@@ -104,6 +114,7 @@ pub fn run() {
             refresh_session_list,
             send_turn,
             interrupt_turn,
+            resolve_approval,
             start_chatgpt_login
         ])
         .run(tauri::generate_context!())

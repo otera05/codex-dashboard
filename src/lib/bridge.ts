@@ -2,6 +2,7 @@ import type { DashboardEvent, DashboardSnapshot, Session } from "../types";
 
 const demoSnapshot: DashboardSnapshot = {
   connected: false,
+  approvals: [],
   account: { connected: true, email: "you@example.com", plan: "Plus", usedPercent: 42, resetsAt: Date.now() + 7_920_000 },
   sessions: [
     {
@@ -61,6 +62,12 @@ export async function interruptTurn(threadId: string, turnId: string): Promise<v
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("interrupt_turn", { threadId, turnId });
+}
+
+export async function resolveApproval(requestId: string | number, decision: "accept" | "acceptForSession" | "decline"): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("resolve_approval", { requestId, decision });
 }
 
 export async function startLogin(): Promise<string | null> {

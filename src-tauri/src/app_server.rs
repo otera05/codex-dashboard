@@ -17,8 +17,8 @@ use tokio::{
 };
 
 use crate::models::{
-    apply_turn_history, merge_turn_history, parse_account, parse_sessions, DashboardSnapshot,
-    RpcEnvelope, Session,
+    apply_turn_history, merge_turn_history, parse_account, parse_sessions, ApprovalRequest,
+    DashboardSnapshot, RpcEnvelope, Session,
 };
 
 #[derive(Debug, Error)]
@@ -84,21 +84,32 @@ impl AppServer {
                 let Ok(envelope) = serde_json::from_str::<RpcEnvelope>(&line) else {
                     continue;
                 };
-                if let Some(id) = envelope.id.as_ref().and_then(Value::as_u64) {
+                if let Some(method) = envelope.method {
+                    if let Some(id) = envelope.id {
+                        server
+                            .handle_server_request(
+                                &event_app,
+                                method,
+                                id,
+                                envelope.params.unwrap_or(Value::Null),
+                            )
+                            .await;
+                    } else {
+                        server
+                            .handle_notification(
+                                &event_app,
+                                &method,
+                                envelope.params.unwrap_or(Value::Null),
+                            )
+                            .await;
+                    }
+                } else if let Some(id) = envelope.id.as_ref().and_then(Value::as_u64) {
                     if let Some(sender) = pending.lock().await.remove(&id) {
                         let result = envelope
                             .error
                             .map(|error| Err(AppServerError::Rpc(error.to_string())))
                             .unwrap_or_else(|| Ok(envelope.result.unwrap_or(Value::Null)));
                         let _ = sender.send(result);
-                    }
-                } else if let Some(method) = envelope.method {
-                    if Self::notification_requires_refresh(&method) {
-                        let refresh_server = Arc::clone(&server);
-                        let refresh_app = event_app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let _ = refresh_server.refresh(&refresh_app).await;
-                        });
                     }
                 }
             }
@@ -134,6 +145,156 @@ impl AppServer {
             return Err(error.into());
         }
         receiver.await.map_err(|_| AppServerError::Disconnected)?
+    }
+
+    async fn handle_server_request(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        method: String,
+        request_id: Value,
+        params: Value,
+    ) {
+        let kind = match method.as_str() {
+            "item/commandExecution/requestApproval" => "command",
+            "item/fileChange/requestApproval" => "fileChange",
+            _ => {
+                let _ = self
+                    .write_response(
+                        request_id,
+                        Err(json!({ "code": -32601, "message": format!("Unsupported server request: {method}") })),
+                    )
+                    .await;
+                return;
+            }
+        };
+        let default_decisions = ["accept", "acceptForSession", "decline"];
+        let available_decisions = params
+            .get("availableDecisions")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|items| !items.is_empty())
+            .unwrap_or_else(|| {
+                default_decisions
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect()
+            });
+        let approval = ApprovalRequest {
+            request_id,
+            kind: kind.to_owned(),
+            thread_id: string_field(&params, "threadId"),
+            turn_id: string_field(&params, "turnId"),
+            item_id: string_field(&params, "itemId"),
+            started_at: params
+                .get("startedAtMs")
+                .and_then(Value::as_i64)
+                .unwrap_or_default(),
+            command: optional_string_field(&params, "command"),
+            cwd: optional_string_field(&params, "cwd"),
+            reason: optional_string_field(&params, "reason"),
+            grant_root: optional_string_field(&params, "grantRoot"),
+            available_decisions,
+        };
+        let mut snapshot = self.snapshot.write().await;
+        snapshot
+            .approvals
+            .retain(|item| item.request_id != approval.request_id);
+        snapshot.approvals.push(approval.clone());
+        drop(snapshot);
+        let _ = app.emit(
+            "dashboard-event",
+            json!({ "type": "approval.requested", "approval": approval }),
+        );
+    }
+
+    async fn handle_notification(self: &Arc<Self>, app: &AppHandle, method: &str, params: Value) {
+        if method == "serverRequest/resolved" {
+            if let Some(request_id) = params.get("requestId") {
+                self.snapshot
+                    .write()
+                    .await
+                    .approvals
+                    .retain(|item| item.request_id != *request_id);
+                let _ = app.emit(
+                    "dashboard-event",
+                    json!({ "type": "approval.resolved", "requestId": request_id }),
+                );
+            }
+        }
+        if Self::notification_requires_refresh(method) {
+            let refresh_server = Arc::clone(self);
+            let refresh_app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = refresh_server.refresh(&refresh_app).await;
+            });
+        }
+    }
+
+    pub async fn resolve_approval(
+        &self,
+        app: &AppHandle,
+        request_id: Value,
+        decision: &str,
+    ) -> Result<(), AppServerError> {
+        if !matches!(
+            decision,
+            "accept" | "acceptForSession" | "decline" | "cancel"
+        ) {
+            return Err(AppServerError::Rpc(
+                "Unsupported approval decision".to_owned(),
+            ));
+        }
+        let mut snapshot = self.snapshot.write().await;
+        let Some(index) = snapshot
+            .approvals
+            .iter()
+            .position(|approval| approval.request_id == request_id)
+        else {
+            return Err(AppServerError::Rpc(
+                "Approval request is no longer pending".to_owned(),
+            ));
+        };
+        let approval = snapshot.approvals.remove(index);
+        drop(snapshot);
+        if let Err(error) = self
+            .write_response(request_id.clone(), Ok(json!({ "decision": decision })))
+            .await
+        {
+            self.snapshot.write().await.approvals.push(approval);
+            return Err(error);
+        }
+        let _ = app.emit(
+            "dashboard-event",
+            json!({ "type": "approval.resolved", "requestId": request_id }),
+        );
+        Ok(())
+    }
+
+    async fn write_response(
+        &self,
+        id: Value,
+        response: Result<Value, Value>,
+    ) -> Result<(), AppServerError> {
+        let envelope = match response {
+            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+            Err(error) => json!({ "jsonrpc": "2.0", "id": id, "error": error }),
+        };
+        let message =
+            serde_json::to_string(&envelope).expect("JSON serialization cannot fail") + "\n";
+        self.stdin
+            .lock()
+            .await
+            .as_mut()
+            .ok_or(AppServerError::Disconnected)?
+            .write_all(message.as_bytes())
+            .await?;
+        Ok(())
     }
 
     pub async fn load_session(&self, thread_id: &str) -> Result<Session, AppServerError> {
@@ -315,4 +476,16 @@ impl AppServer {
                 | "account/login/completed"
         )
     }
+}
+
+fn string_field(value: &Value, field: &str) -> String {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn optional_string_field(value: &Value, field: &str) -> Option<String> {
+    value.get(field).and_then(Value::as_str).map(str::to_owned)
 }

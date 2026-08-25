@@ -108,14 +108,36 @@ pub struct Account {
 #[serde(rename_all = "camelCase")]
 pub struct DashboardSnapshot {
     pub sessions: Vec<Session>,
+    pub approvals: Vec<ApprovalRequest>,
     pub account: Account,
     pub connected: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalRequest {
+    pub request_id: Value,
+    pub kind: String,
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub started_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant_root: Option<String>,
+    pub available_decisions: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RpcEnvelope {
     pub id: Option<Value>,
     pub method: Option<String>,
+    pub params: Option<Value>,
     pub result: Option<Value>,
     pub error: Option<Value>,
 }

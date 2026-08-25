@@ -1,15 +1,16 @@
 import { create } from "zustand";
-import type { Account, DashboardEvent, Session } from "./types";
+import type { Account, ApprovalRequest, DashboardEvent, Session } from "./types";
 
 interface DashboardState {
   sessions: Session[];
+  approvals: ApprovalRequest[];
   account: Account;
   connected: boolean;
   selectedId?: string;
   settingsOpen: boolean;
   loadingSessionId?: string;
   sessionError?: string;
-  hydrate: (sessions: Session[], account: Account, connected: boolean) => void;
+  hydrate: (sessions: Session[], approvals: ApprovalRequest[], account: Account, connected: boolean) => void;
   select: (id: string) => void;
   setSettingsOpen: (open: boolean) => void;
   setSessionLoading: (id?: string, error?: string) => void;
@@ -18,9 +19,10 @@ interface DashboardState {
 }
 
 export const useDashboard = create<DashboardState>((set) => ({
-  sessions: [], account: { connected: false }, connected: false, settingsOpen: false,
-  hydrate: (sessions, account, connected) => set((state) => ({
+  sessions: [], approvals: [], account: { connected: false }, connected: false, settingsOpen: false,
+  hydrate: (sessions, approvals, account, connected) => set((state) => ({
     sessions,
+    approvals,
     account,
     connected,
     selectedId: state.selectedId && sessions.some((session) => session.id === state.selectedId) ? state.selectedId : sessions[0]?.id,
@@ -41,11 +43,14 @@ export const useDashboard = create<DashboardState>((set) => ({
       });
       return {
         sessions,
+        approvals: event.snapshot.approvals ?? [],
         account: event.snapshot.account,
         connected: event.snapshot.connected,
         selectedId: state.selectedId && sessions.some((session) => session.id === state.selectedId) ? state.selectedId : sessions[0]?.id,
       };
     }
+    if (event.type === "approval.requested") return { approvals: [...state.approvals.filter((item) => item.requestId !== event.approval.requestId), event.approval] };
+    if (event.type === "approval.resolved") return { approvals: state.approvals.filter((item) => item.requestId !== event.requestId) };
     if (event.type === "account.updated") return { account: event.account };
     if (event.type === "connection.changed") return { connected: event.connected };
     const exists = state.sessions.some((session) => session.id === event.session.id);
