@@ -53,6 +53,23 @@ async fn create_thread(
 }
 
 #[tauri::command]
+async fn rename_thread(
+    server: State<'_, Arc<AppServer>>,
+    thread_id: String,
+    name: String,
+) -> Result<Session, AppServerError> {
+    server.rename_thread(&thread_id, &name).await
+}
+
+#[tauri::command]
+async fn archive_thread(
+    server: State<'_, Arc<AppServer>>,
+    thread_id: String,
+) -> Result<(), AppServerError> {
+    server.archive_thread(&thread_id).await
+}
+
+#[tauri::command]
 async fn send_turn(
     server: State<'_, Arc<AppServer>>,
     thread_id: String,
@@ -129,6 +146,8 @@ pub fn run() {
             refresh_session_list,
             list_models,
             create_thread,
+            rename_thread,
+            archive_thread,
             send_turn,
             interrupt_turn,
             resolve_approval,

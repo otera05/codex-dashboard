@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowUp, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Search, Settings, Sparkles, Unplug, UserRound } from "lucide-react";
+import { Activity, Archive, ArrowUp, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Pencil, Search, Settings, Sparkles, Unplug, UserRound } from "lucide-react";
 import { getSession, getSnapshot, interruptTurn, sendTurn, startLogin, subscribe } from "./lib/bridge";
 import { MessageContent } from "./components/MessageContent";
 import { CommandActivity } from "./components/CommandActivity";
 import { FileChangeActivity } from "./components/FileChangeActivity";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { NewSessionDialog } from "./components/NewSessionDialog";
+import { SessionActionDialog } from "./components/SessionActionDialog";
 import { useSessionSync } from "./hooks/useSessionSync";
 import { useSessionListSync } from "./hooks/useSessionListSync";
 import { useDashboard } from "./store";
@@ -20,9 +21,15 @@ function relativeTime(timestamp: number) {
   return `${Math.floor(seconds / 3600)}h`;
 }
 
-function Sidebar({ onNewSession }: { onNewSession: () => void }) {
+function Sidebar({ onNewSession, onSessionAction }: { onNewSession: () => void; onSessionAction: (action: "rename" | "archive", session: Session) => void }) {
   const { sessions, selectedId, select, account, connected, setSettingsOpen } = useDashboard();
   const [query, setQuery] = useState("");
+  const [menuId, setMenuId] = useState<string>();
+  useEffect(() => {
+    const closeMenu = () => setMenuId(undefined);
+    window.addEventListener("click", closeMenu);
+    return () => window.removeEventListener("click", closeMenu);
+  }, []);
   const filtered = sessions.filter((session) => session.title.toLowerCase().includes(query.toLowerCase()));
   const usage = Math.min(100, Math.max(0, account.usedPercent ?? 0));
   return <aside className="sidebar">
@@ -32,11 +39,11 @@ function Sidebar({ onNewSession }: { onNewSession: () => void }) {
     <label className="search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search sessions" /></label>
     <div className="section-title"><span>Sessions</span><span>{filtered.length}</span></div>
     <nav className="session-list">
-      {filtered.map((session) => <button key={session.id} className={`session-item ${selectedId === session.id ? "selected" : ""}`} onClick={() => select(session.id)}>
-        <span className={`status-dot ${session.status}`} />
-        <span className="session-copy"><strong>{session.title}</strong><span>{statusLabel[session.status]} · {relativeTime(session.updatedAt)}</span></span>
-        <MoreHorizontal className="session-more" size={16} />
-      </button>)}
+      {filtered.map((session) => <div key={session.id} className={`session-item ${selectedId === session.id ? "selected" : ""}`}>
+        <button className="session-select" onClick={() => { select(session.id); setMenuId(undefined); }}><span className={`status-dot ${session.status}`} /><span className="session-copy"><strong>{session.title}</strong><span>{statusLabel[session.status]} · {relativeTime(session.updatedAt)}</span></span></button>
+        <button className="session-more" aria-label={`Session actions for ${session.title}`} onClick={(event) => { event.stopPropagation(); setMenuId((current) => current === session.id ? undefined : session.id); }}><MoreHorizontal size={16} /></button>
+        {menuId === session.id && <div className="session-menu" onClick={(event) => event.stopPropagation()}><button onClick={() => { setMenuId(undefined); onSessionAction("rename", session); }}><Pencil size={13} /> Rename</button><button className="archive" onClick={() => { setMenuId(undefined); onSessionAction("archive", session); }}><Archive size={13} /> Archive</button></div>}
+      </div>)}
       {!filtered.length && <div className="empty-list">No sessions found</div>}
     </nav>
     <div className="account-card">
@@ -111,8 +118,9 @@ function SettingsView() {
 }
 
 export function App() {
-  const { sessions, approvals, selectedId, settingsOpen, connected, loadingSessionId, sessionError, hydrate, applyEvent, mergeSession, addSession, setSessionLoading } = useDashboard();
+  const { sessions, approvals, selectedId, settingsOpen, connected, loadingSessionId, sessionError, hydrate, applyEvent, mergeSession, addSession, removeSession, setSessionLoading } = useDashboard();
   const [newSessionOpen, setNewSessionOpen] = useState(false);
+  const [sessionAction, setSessionAction] = useState<{ action: "rename" | "archive"; session: Session }>();
   const applySnapshot = useCallback((snapshot: DashboardSnapshot) => applyEvent({ type: "snapshot", snapshot }), [applyEvent]);
   useEffect(() => { let unsubscribe: () => void = () => undefined; void getSnapshot().then((snapshot) => hydrate(snapshot.sessions, snapshot.approvals ?? [], snapshot.account, snapshot.connected)); void subscribe(applyEvent).then((fn) => { unsubscribe = fn; }); return () => unsubscribe(); }, [hydrate, applyEvent]);
   const session = useMemo(() => sessions.find((item) => item.id === selectedId), [sessions, selectedId]);
@@ -136,5 +144,5 @@ export function App() {
     return () => window.removeEventListener("keydown", openNewSession);
   }, []);
   const sessionApprovals = (approvals ?? []).filter((approval) => approval.threadId === selectedId);
-  return <div className="app-shell"><Sidebar onNewSession={() => setNewSessionOpen(true)} />{settingsOpen ? <SettingsView /> : <Workspace session={session} approvals={sessionApprovals} loading={loadingSessionId === selectedId} error={sessionError} />}{newSessionOpen && <NewSessionDialog defaultCwd={session?.cwd ?? ""} defaultModel={session?.model} onClose={() => setNewSessionOpen(false)} onCreated={(created) => { addSession(created); setNewSessionOpen(false); }} />}</div>;
+  return <div className="app-shell"><Sidebar onNewSession={() => setNewSessionOpen(true)} onSessionAction={(action, target) => setSessionAction({ action, session: target })} />{settingsOpen ? <SettingsView /> : <Workspace session={session} approvals={sessionApprovals} loading={loadingSessionId === selectedId} error={sessionError} />}{newSessionOpen && <NewSessionDialog defaultCwd={session?.cwd ?? ""} defaultModel={session?.model} onClose={() => setNewSessionOpen(false)} onCreated={(created) => { addSession(created); setNewSessionOpen(false); }} />}{sessionAction && <SessionActionDialog action={sessionAction.action} session={sessionAction.session} onClose={() => setSessionAction(undefined)} onRenamed={(renamed) => { mergeSession(renamed); setSessionAction(undefined); }} onArchived={(id) => { removeSession(id); setSessionAction(undefined); }} />}</div>;
 }

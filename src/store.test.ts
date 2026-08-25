@@ -79,4 +79,13 @@ describe("dashboard session list updates", () => {
     expect(useDashboard.getState().sessions.map(({ id }) => id)).toEqual(["created", "existing"]);
     expect(useDashboard.getState().selectedId).toBe("created");
   });
+
+  it("removes an archived session and selects the next one", () => {
+    useDashboard.setState({ sessions: [session("archived"), session("remaining")], selectedId: "archived" });
+
+    useDashboard.getState().removeSession("archived");
+
+    expect(useDashboard.getState().sessions.map(({ id }) => id)).toEqual(["remaining"]);
+    expect(useDashboard.getState().selectedId).toBe("remaining");
+  });
 });

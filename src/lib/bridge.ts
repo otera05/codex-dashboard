@@ -77,6 +77,26 @@ export async function createThread(cwd: string, model: string | undefined, promp
   return invoke<Session>("create_thread", { cwd, model, prompt });
 }
 
+export async function renameThread(threadId: string, name: string): Promise<Session> {
+  if (!isTauri()) {
+    const session = demoSnapshot.sessions.find((item) => item.id === threadId);
+    if (!session) throw new Error("Session not found");
+    session.title = name;
+    return { ...session };
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Session>("rename_thread", { threadId, name });
+}
+
+export async function archiveThread(threadId: string): Promise<void> {
+  if (!isTauri()) {
+    demoSnapshot.sessions = demoSnapshot.sessions.filter((item) => item.id !== threadId);
+    return;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("archive_thread", { threadId });
+}
+
 export async function sendTurn(threadId: string, text: string): Promise<void> {
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");

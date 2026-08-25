@@ -426,6 +426,37 @@ impl AppServer {
         Ok(session)
     }
 
+    pub async fn rename_thread(
+        &self,
+        thread_id: &str,
+        name: &str,
+    ) -> Result<Session, AppServerError> {
+        self.request(
+            "thread/name/set",
+            json!({ "threadId": thread_id, "name": name }),
+        )
+        .await?;
+        let mut snapshot = self.snapshot.write().await;
+        let session = snapshot
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == thread_id)
+            .ok_or_else(|| AppServerError::Rpc(format!("Session {thread_id} was not found")))?;
+        session.title = name.to_owned();
+        Ok(session.clone())
+    }
+
+    pub async fn archive_thread(&self, thread_id: &str) -> Result<(), AppServerError> {
+        self.request("thread/archive", json!({ "threadId": thread_id }))
+            .await?;
+        let mut snapshot = self.snapshot.write().await;
+        snapshot.sessions.retain(|session| session.id != thread_id);
+        snapshot
+            .approvals
+            .retain(|approval| approval.thread_id != thread_id);
+        Ok(())
+    }
+
     pub async fn refresh_session(&self, thread_id: &str) -> Result<Session, AppServerError> {
         let response = self
             .request(
@@ -555,6 +586,9 @@ impl AppServer {
         matches!(
             method,
             "thread/started"
+                | "thread/archived"
+                | "thread/deleted"
+                | "thread/unarchived"
                 | "thread/status/changed"
                 | "thread/name/updated"
                 | "thread/tokenUsage/updated"
