@@ -91,11 +91,11 @@ export function App() {
   useEffect(() => { let unsubscribe: () => void = () => undefined; void getSnapshot().then((snapshot) => hydrate(snapshot.sessions, snapshot.account, snapshot.connected)); void subscribe(applyEvent).then((fn) => { unsubscribe = fn; }); return () => unsubscribe(); }, [hydrate, applyEvent]);
   const session = useMemo(() => sessions.find((item) => item.id === selectedId), [sessions, selectedId]);
   useEffect(() => {
-    if (!selectedId || !connected || session?.historyLoaded || loadingSessionId === selectedId) return;
+    if (!selectedId || !connected || session?.historyLoaded) return;
     let active = true;
     setSessionLoading(selectedId);
     void getSession(selectedId).then((loaded) => { if (active) mergeSession(loaded); }).catch((error: unknown) => { if (active) setSessionLoading(undefined, error instanceof Error ? error.message : String(error)); });
     return () => { active = false; };
-  }, [selectedId, connected, session?.historyLoaded, loadingSessionId, mergeSession, setSessionLoading]);
+  }, [selectedId, connected, session?.historyLoaded, mergeSession, setSessionLoading]);
   return <div className="app-shell"><Sidebar />{settingsOpen ? <SettingsView /> : <Workspace session={session} loading={loadingSessionId === selectedId} error={sessionError} />}</div>;
 }
