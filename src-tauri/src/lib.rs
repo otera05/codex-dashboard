@@ -108,11 +108,7 @@ async fn send_turn(
     thread_id: String,
     text: String,
 ) -> Result<(), AppServerError> {
-    server
-        .request("thread/resume", json!({ "threadId": thread_id }))
-        .await?;
-    server.request("turn/start", json!({ "threadId": thread_id, "input": [{ "type": "text", "text": text, "text_elements": [] }] })).await?;
-    Ok(())
+    server.send_turn(&thread_id, &text).await
 }
 
 #[tauri::command]

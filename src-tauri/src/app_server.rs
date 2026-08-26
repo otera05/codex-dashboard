@@ -61,6 +61,10 @@ fn is_unmaterialized_thread_error(error: &AppServerError) -> bool {
     matches!(error, AppServerError::Rpc(message) if message.contains("is not materialized yet") && message.contains("thread/turns/list"))
 }
 
+fn requires_thread_resume(pending_threads: &HashSet<String>, thread_id: &str) -> bool {
+    !pending_threads.contains(thread_id)
+}
+
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, AppServerError>>>>>;
 
 pub struct AppServer {
@@ -735,6 +739,23 @@ impl AppServer {
         Ok(session.clone())
     }
 
+    pub async fn send_turn(&self, thread_id: &str, text: &str) -> Result<(), AppServerError> {
+        let requires_resume = {
+            let pending_threads = self.pending_threads.lock().await;
+            requires_thread_resume(&pending_threads, thread_id)
+        };
+        if requires_resume {
+            self.request("thread/resume", json!({ "threadId": thread_id }))
+                .await?;
+        }
+        self.request(
+            "turn/start",
+            json!({ "threadId": thread_id, "input": [{ "type": "text", "text": text, "text_elements": [] }] }),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn reload_sessions(&self) -> Result<DashboardSnapshot, AppServerError> {
         let mut threads = Vec::new();
         let mut cursor: Option<String> = None;
@@ -1026,6 +1047,13 @@ mod tests {
             &mut pending_threads,
         );
         assert!(!pending_threads.contains("pending"));
+    }
+
+    #[test]
+    fn skips_resume_for_a_pending_unmaterialized_thread() {
+        let pending_threads = HashSet::from(["pending".to_owned()]);
+        assert!(!requires_thread_resume(&pending_threads, "pending"));
+        assert!(requires_thread_resume(&pending_threads, "existing"));
     }
 }
 
