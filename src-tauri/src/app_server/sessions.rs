@@ -189,6 +189,115 @@ impl AppServer {
         .await?;
         Ok(())
     }
+
+    pub async fn rename_thread(
+        &self,
+        thread_id: &str,
+        name: &str,
+    ) -> Result<Session, AppServerError> {
+        self.request(
+            "thread/name/set",
+            json!({ "threadId": thread_id, "name": name }),
+        )
+        .await?;
+        let mut snapshot = self.snapshot.write().await;
+        let session = snapshot
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == thread_id)
+            .ok_or_else(|| AppServerError::Rpc(format!("Session {thread_id} was not found")))?;
+        session.title = name.to_owned();
+        Ok(session.clone())
+    }
+
+    pub async fn archive_thread(&self, thread_id: &str) -> Result<(), AppServerError> {
+        self.request("thread/archive", json!({ "threadId": thread_id }))
+            .await?;
+        self.pending_threads.lock().await.remove(thread_id);
+        let mut snapshot = self.snapshot.write().await;
+        if let Some(index) = snapshot
+            .sessions
+            .iter()
+            .position(|session| session.id == thread_id)
+        {
+            let session = snapshot.sessions.remove(index);
+            snapshot
+                .archived_sessions
+                .retain(|item| item.id != thread_id);
+            snapshot.archived_sessions.insert(0, session);
+        }
+        snapshot
+            .approvals
+            .retain(|approval| approval.thread_id != thread_id);
+        Ok(())
+    }
+
+    pub async fn reload_archived_sessions(&self) -> Result<Vec<Session>, AppServerError> {
+        let mut threads = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..10 {
+            let response = self
+                .request(
+                    "thread/list",
+                    json!({
+                        "cursor": cursor,
+                        "limit": 100,
+                        "sortKey": "updated_at",
+                        "sortDirection": "desc",
+                        "archived": true
+                    }),
+                )
+                .await?;
+            if let Some(page) = response.get("data").and_then(Value::as_array) {
+                threads.extend(page.iter().cloned());
+            }
+            cursor = response
+                .get("nextCursor")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        let mut sessions = parse_sessions(&json!({ "data": threads }));
+        sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        let mut snapshot = self.snapshot.write().await;
+        Self::preserve_loaded_history(&snapshot.archived_sessions, &mut sessions);
+        snapshot.archived_sessions = sessions;
+        Ok(snapshot.archived_sessions.clone())
+    }
+
+    pub async fn unarchive_thread(&self, thread_id: &str) -> Result<Session, AppServerError> {
+        let response = self
+            .request("thread/unarchive", json!({ "threadId": thread_id }))
+            .await?;
+        let thread = response
+            .get("thread")
+            .cloned()
+            .ok_or_else(|| AppServerError::Rpc("thread/unarchive returned no thread".to_owned()))?;
+        let mut restored = parse_sessions(&json!({ "data": [thread] }))
+            .pop()
+            .ok_or_else(|| {
+                AppServerError::Rpc("Could not parse the restored session".to_owned())
+            })?;
+        let mut snapshot = self.snapshot.write().await;
+        if let Some(previous) = snapshot
+            .archived_sessions
+            .iter()
+            .find(|session| session.id == thread_id)
+        {
+            restored.model.clone_from(&previous.model);
+            restored.messages.clone_from(&previous.messages);
+            restored.token_usage.clone_from(&previous.token_usage);
+            restored.history_loaded = previous.history_loaded;
+        }
+        snapshot
+            .archived_sessions
+            .retain(|item| item.id != thread_id);
+        snapshot.sessions.retain(|item| item.id != thread_id);
+        snapshot.sessions.insert(0, restored.clone());
+        Ok(restored)
+    }
 }
 
 #[cfg(test)]
