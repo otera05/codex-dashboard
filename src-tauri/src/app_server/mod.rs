@@ -22,10 +22,6 @@ use crate::models::{
     parse_account, parse_sessions, ApprovalRequest, CodexModel, DashboardSnapshot, Session,
 };
 
-fn requires_thread_resume(pending_threads: &HashSet<String>, thread_id: &str) -> bool {
-    !pending_threads.contains(thread_id)
-}
-
 pub struct AppServer {
     child: Mutex<Option<Child>>,
     stdin: Mutex<Option<ChildStdin>>,
@@ -215,64 +211,6 @@ impl AppServer {
             .collect())
     }
 
-    pub async fn create_thread(
-        &self,
-        cwd: &str,
-        model: Option<&str>,
-        prompt: &str,
-    ) -> Result<Session, AppServerError> {
-        let mut params = json!({ "cwd": cwd, "threadSource": "codex-dashboard" });
-        if let Some(model) = model.filter(|value| !value.is_empty()) {
-            params["model"] = json!(model);
-        }
-        let response = self.request("thread/start", params).await?;
-        let thread_id = response
-            .pointer("/thread/id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppServerError::Rpc("thread/start returned no thread id".to_owned()))?
-            .to_owned();
-        if !prompt.trim().is_empty() {
-            self.request(
-                "turn/start",
-                json!({ "threadId": thread_id, "input": [{ "type": "text", "text": prompt, "text_elements": [] }] }),
-            )
-            .await?;
-        }
-        let thread = response
-            .get("thread")
-            .cloned()
-            .ok_or_else(|| AppServerError::Rpc("thread/start returned no thread".to_owned()))?;
-        let mut session = parse_sessions(&json!({ "data": [thread] }))
-            .pop()
-            .ok_or_else(|| AppServerError::Rpc("Could not parse the new session".to_owned()))?;
-        session.model = response
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("Codex")
-            .to_owned();
-        if session.title.trim().is_empty() || session.title == "Untitled session" {
-            session.title = prompt
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .unwrap_or("New session")
-                .chars()
-                .take(80)
-                .collect();
-        }
-        if !prompt.trim().is_empty() {
-            session.status = "working".to_owned();
-        } else {
-            session.history_loaded = true;
-            self.pending_threads.lock().await.insert(thread_id.clone());
-        }
-        let mut snapshot = self.snapshot.write().await;
-        snapshot.sessions.retain(|item| item.id != thread_id);
-        snapshot.sessions.insert(0, session.clone());
-        Ok(session)
-    }
-
     pub async fn rename_thread(
         &self,
         thread_id: &str,
@@ -380,23 +318,6 @@ impl AppServer {
         snapshot.sessions.retain(|item| item.id != thread_id);
         snapshot.sessions.insert(0, restored.clone());
         Ok(restored)
-    }
-
-    pub async fn send_turn(&self, thread_id: &str, text: &str) -> Result<(), AppServerError> {
-        let requires_resume = {
-            let pending_threads = self.pending_threads.lock().await;
-            requires_thread_resume(&pending_threads, thread_id)
-        };
-        if requires_resume {
-            self.request("thread/resume", json!({ "threadId": thread_id }))
-                .await?;
-        }
-        self.request(
-            "turn/start",
-            json!({ "threadId": thread_id, "input": [{ "type": "text", "text": text, "text_elements": [] }] }),
-        )
-        .await?;
-        Ok(())
     }
 
     pub async fn reload_sessions(&self) -> Result<DashboardSnapshot, AppServerError> {
@@ -553,12 +474,5 @@ mod tests {
             &mut pending_threads,
         );
         assert!(!pending_threads.contains("pending"));
-    }
-
-    #[test]
-    fn skips_resume_for_a_pending_unmaterialized_thread() {
-        let pending_threads = HashSet::from(["pending".to_owned()]);
-        assert!(!requires_thread_resume(&pending_threads, "pending"));
-        assert!(requires_thread_resume(&pending_threads, "existing"));
     }
 }

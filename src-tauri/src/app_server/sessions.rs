@@ -1,6 +1,8 @@
 use serde_json::{json, Value};
 
-use crate::models::{apply_turn_history, merge_turn_history, Session};
+use std::collections::HashSet;
+
+use crate::models::{apply_turn_history, merge_turn_history, parse_sessions, Session};
 
 use super::{AppServer, AppServerError};
 
@@ -8,7 +10,69 @@ fn is_unmaterialized_thread_error(error: &AppServerError) -> bool {
     matches!(error, AppServerError::Rpc(message) if message.contains("is not materialized yet") && message.contains("thread/turns/list"))
 }
 
+fn requires_thread_resume(pending_threads: &HashSet<String>, thread_id: &str) -> bool {
+    !pending_threads.contains(thread_id)
+}
+
 impl AppServer {
+    pub async fn create_thread(
+        &self,
+        cwd: &str,
+        model: Option<&str>,
+        prompt: &str,
+    ) -> Result<Session, AppServerError> {
+        let mut params = json!({ "cwd": cwd, "threadSource": "codex-dashboard" });
+        if let Some(model) = model.filter(|value| !value.is_empty()) {
+            params["model"] = json!(model);
+        }
+        let response = self.request("thread/start", params).await?;
+        let thread_id = response
+            .pointer("/thread/id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppServerError::Rpc("thread/start returned no thread id".to_owned()))?
+            .to_owned();
+        if !prompt.trim().is_empty() {
+            self.request(
+                "turn/start",
+                json!({ "threadId": thread_id, "input": [{ "type": "text", "text": prompt, "text_elements": [] }] }),
+            )
+            .await?;
+        }
+        let thread = response
+            .get("thread")
+            .cloned()
+            .ok_or_else(|| AppServerError::Rpc("thread/start returned no thread".to_owned()))?;
+        let mut session = parse_sessions(&json!({ "data": [thread] }))
+            .pop()
+            .ok_or_else(|| AppServerError::Rpc("Could not parse the new session".to_owned()))?;
+        session.model = response
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("Codex")
+            .to_owned();
+        if session.title.trim().is_empty() || session.title == "Untitled session" {
+            session.title = prompt
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .unwrap_or("New session")
+                .chars()
+                .take(80)
+                .collect();
+        }
+        if !prompt.trim().is_empty() {
+            session.status = "working".to_owned();
+        } else {
+            session.history_loaded = true;
+            self.pending_threads.lock().await.insert(thread_id.clone());
+        }
+        let mut snapshot = self.snapshot.write().await;
+        snapshot.sessions.retain(|item| item.id != thread_id);
+        snapshot.sessions.insert(0, session.clone());
+        Ok(session)
+    }
+
     pub async fn load_session(&self, thread_id: &str) -> Result<Session, AppServerError> {
         let mut turns = Vec::new();
         let mut cursor: Option<String> = None;
@@ -108,6 +172,23 @@ impl AppServer {
         merge_turn_history(session, &turns);
         Ok(session.clone())
     }
+
+    pub async fn send_turn(&self, thread_id: &str, text: &str) -> Result<(), AppServerError> {
+        let requires_resume = {
+            let pending_threads = self.pending_threads.lock().await;
+            requires_thread_resume(&pending_threads, thread_id)
+        };
+        if requires_resume {
+            self.request("thread/resume", json!({ "threadId": thread_id }))
+                .await?;
+        }
+        self.request(
+            "turn/start",
+            json!({ "threadId": thread_id, "input": [{ "type": "text", "text": text, "text_elements": [] }] }),
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -123,5 +204,12 @@ mod tests {
         assert!(!is_unmaterialized_thread_error(&AppServerError::Rpc(
             r#"{"code":-32600,"message":"another request failed"}"#.to_owned(),
         )));
+    }
+
+    #[test]
+    fn skips_resume_for_a_pending_unmaterialized_thread() {
+        let pending_threads = HashSet::from(["pending".to_owned()]);
+        assert!(!requires_thread_resume(&pending_threads, "pending"));
+        assert!(requires_thread_resume(&pending_threads, "existing"));
     }
 }
