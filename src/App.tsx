@@ -101,7 +101,9 @@ function relativeReset(timestamp: number) {
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 function Workspace({ session, approvals, archived, loading, error, onSessionAction }: { session?: Session; approvals: ApprovalRequest[]; archived: boolean; loading: boolean; error?: string; onSessionAction: (action: "rename" | "archive" | "restore", session: Session) => void }) {
-  const [draft, setDraft] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [sending, setSending] = useState<Record<string, boolean>>({});
+  const [sendFailure, setSendFailure] = useState<{ sessionId: string; text: string; message: string }>();
   const [activityOpen, setActivityOpen] = useState(false);
   const conversationRef = useRef<HTMLElement>(null);
   const followLatest = useRef(true);
@@ -117,11 +119,24 @@ function Workspace({ session, approvals, archived, loading, error, onSessionActi
   }, [session?.id, messageVersion]);
 
   if (!session) return <main className="workspace empty"><Bot size={34} /><h2>Select a session</h2><p>Choose a Codex session from the sidebar.</p></main>;
-  const submit = async () => {
-    const value = draft.trim();
-    if (!value) return;
-    setDraft("");
-    await sendTurn(session.id, value);
+  const draft = drafts[session.id] ?? "";
+  const isSending = Boolean(sending[session.id]);
+  const failure = sendFailure?.sessionId === session.id ? sendFailure : undefined;
+  const submit = async (retryText?: string) => {
+    const target = session;
+    const value = (retryText ?? draft).trim();
+    if (!value || sending[target.id]) return;
+    setSending((current) => ({ ...current, [target.id]: true }));
+    setSendFailure(undefined);
+    setDrafts((current) => ({ ...current, [target.id]: "" }));
+    try {
+      await sendTurn(target.id, value);
+    } catch (cause) {
+      setDrafts((current) => ({ ...current, [target.id]: current[target.id]?.trim() ? current[target.id] : value }));
+      setSendFailure({ sessionId: target.id, text: value, message: cause instanceof Error ? cause.message : String(cause) });
+    } finally {
+      setSending((current) => ({ ...current, [target.id]: false }));
+    }
   };
   return <main className="workspace">
     <header className="workspace-header">
@@ -142,7 +157,8 @@ function Workspace({ session, approvals, archived, loading, error, onSessionActi
     </section>
     {!archived && <footer className="composer-wrap">
       {session.status === "working" && session.activeTurnId && <div className="running-bar"><span><span className="pulse" /> Codex is working</span><button onClick={() => interruptTurn(session.id, session.activeTurnId!)}><CircleStop size={14} /> Stop</button></div>}
-      <div className="composer"><textarea rows={2} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder="Message Codex…" /><div className="composer-bottom"><span>↵ send · ⇧↵ new line</span><button disabled={!draft.trim()} onClick={() => void submit()}><ArrowUp size={17} /></button></div></div>
+      {failure && <div className="send-error" role="alert"><span>{failure.message}</span><button onClick={() => void submit(failure.text)} disabled={isSending}>Retry</button></div>}
+      <div className={`composer ${isSending ? "sending" : ""}`}><textarea rows={2} value={draft} onChange={(event) => { const value = event.target.value; setDrafts((current) => ({ ...current, [session.id]: value })); if (failure) setSendFailure(undefined); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder="Message Codex…" /><div className="composer-bottom"><span>{isSending ? "Sending…" : "↵ send · ⇧↵ new line"}</span><button aria-label="Send message" disabled={!draft.trim() || isSending} onClick={() => void submit()}>{isSending ? <LoaderCircle size={16} /> : <ArrowUp size={17} />}</button></div></div>
       <div className="token-summary"><span>{session.model}</span><span>{(session.tokenUsage.input + session.tokenUsage.output).toLocaleString()} tokens</span><span>{session.tokenUsage.cached.toLocaleString()} cached</span></div>
     </footer>}
     {activityOpen && <SessionActivityPanel session={session} onClose={() => setActivityOpen(false)} />}

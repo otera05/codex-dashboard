@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardSnapshot, Session } from "./types";
 
 const bridge = vi.hoisted(() => ({
@@ -40,6 +40,8 @@ const snapshot: DashboardSnapshot = {
 };
 
 describe("session history loading", () => {
+  afterEach(cleanup);
+
   beforeEach(() => {
     vi.clearAllMocks();
     useDashboard.setState({
@@ -68,5 +70,21 @@ describe("session history loading", () => {
     expect(await screen.findByText("Loaded from App Server")).toBeInTheDocument();
     expect(bridge.getSession).toHaveBeenCalledOnce();
     expect(screen.queryByText("Loading session history…")).not.toBeInTheDocument();
+  });
+
+  it("restores a failed message and allows retrying it", async () => {
+    bridge.sendTurn.mockRejectedValueOnce(new Error("Codex is unavailable")).mockResolvedValueOnce(undefined);
+    render(<App />);
+    await screen.findByText("Loaded from App Server");
+
+    const composer = screen.getByPlaceholderText("Message Codex…");
+    fireEvent.change(composer, { target: { value: "Try this task" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Codex is unavailable");
+    expect(composer).toHaveValue("Try this task");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(bridge.sendTurn).toHaveBeenCalledTimes(2));
+    expect(bridge.sendTurn).toHaveBeenLastCalledWith("thread-1", "Try this task");
   });
 });
