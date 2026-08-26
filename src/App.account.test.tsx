@@ -34,6 +34,8 @@ describe("account connection", () => {
     vi.clearAllMocks();
     useDashboard.setState({
       sessions: [],
+      archivedSessions: [],
+      showingArchived: false,
       approvals: [],
       account: { connected: false },
       connected: false,

@@ -44,6 +44,8 @@ describe("session history loading", () => {
     vi.clearAllMocks();
     useDashboard.setState({
       sessions: [],
+      archivedSessions: [],
+      showingArchived: false,
       account: { connected: false },
       connected: false,
       selectedId: undefined,

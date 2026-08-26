@@ -2,6 +2,7 @@ import type { Account, CodexModel, DashboardEvent, DashboardSnapshot, Session } 
 
 const demoSnapshot: DashboardSnapshot = {
   connected: false,
+  archivedSessions: [],
   approvals: [],
   account: { connected: true, email: "you@example.com", plan: "Plus", usedPercent: 42, resetsAt: Date.now() + 7_920_000 },
   sessions: [
@@ -108,11 +109,31 @@ export async function renameThread(threadId: string, name: string): Promise<Sess
 
 export async function archiveThread(threadId: string): Promise<void> {
   if (!isTauri()) {
+    const session = demoSnapshot.sessions.find((item) => item.id === threadId);
     demoSnapshot.sessions = demoSnapshot.sessions.filter((item) => item.id !== threadId);
+    if (session) demoSnapshot.archivedSessions = [session, ...(demoSnapshot.archivedSessions ?? []).filter((item) => item.id !== threadId)];
     return;
   }
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("archive_thread", { threadId });
+}
+
+export async function listArchivedSessions(): Promise<Session[]> {
+  if (!isTauri()) return demoSnapshot.archivedSessions ?? [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Session[]>("list_archived_sessions");
+}
+
+export async function unarchiveThread(threadId: string): Promise<Session> {
+  if (!isTauri()) {
+    const session = demoSnapshot.archivedSessions?.find((item) => item.id === threadId);
+    if (!session) throw new Error("Archived session not found");
+    demoSnapshot.archivedSessions = demoSnapshot.archivedSessions?.filter((item) => item.id !== threadId);
+    demoSnapshot.sessions.unshift(session);
+    return session;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Session>("unarchive_thread", { threadId });
 }
 
 export async function sendTurn(threadId: string, text: string): Promise<void> {

@@ -1,14 +1,15 @@
-import { Archive, LoaderCircle, Pencil, X } from "lucide-react";
+import { Archive, LoaderCircle, Pencil, RotateCcw, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { archiveThread, renameThread } from "../lib/bridge";
+import { archiveThread, renameThread, unarchiveThread } from "../lib/bridge";
 import type { Session } from "../types";
 
-export function SessionActionDialog({ action, session, onClose, onRenamed, onArchived }: { action: "rename" | "archive"; session: Session; onClose: () => void; onRenamed: (session: Session) => void; onArchived: (id: string) => void }) {
+export function SessionActionDialog({ action, session, onClose, onRenamed, onArchived, onRestored }: { action: "rename" | "archive" | "restore"; session: Session; onClose: () => void; onRenamed: (session: Session) => void; onArchived: (id: string) => void; onRestored: (session: Session) => void }) {
   const [name, setName] = useState(session.title);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
   const inputRef = useRef<HTMLInputElement>(null);
   const isRename = action === "rename";
+  const isRestore = action === "restore";
 
   useEffect(() => { if (isRename) inputRef.current?.select(); }, [isRename]);
   useEffect(() => {
@@ -24,6 +25,7 @@ export function SessionActionDialog({ action, session, onClose, onRenamed, onArc
     setError(undefined);
     try {
       if (isRename) onRenamed(await renameThread(session.id, name.trim()));
+      else if (isRestore) onRestored(await unarchiveThread(session.id));
       else { await archiveThread(session.id); onArchived(session.id); }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -33,12 +35,12 @@ export function SessionActionDialog({ action, session, onClose, onRenamed, onArc
 
   return <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting) onClose(); }}>
     <form className="session-action-dialog" role="dialog" aria-modal="true" aria-labelledby="session-action-title" onSubmit={(event) => void submit(event)}>
-      <div className="dialog-heading"><span>{isRename ? <Pencil size={17} /> : <Archive size={17} />}</span><div><h2 id="session-action-title">{isRename ? "Rename session" : "Archive session"}</h2><p>{isRename ? "Choose a descriptive name" : "Remove this session from the active list"}</p></div><button type="button" aria-label="Close session action dialog" onClick={onClose} disabled={submitting}><X size={17} /></button></div>
+      <div className="dialog-heading"><span>{isRename ? <Pencil size={17} /> : isRestore ? <RotateCcw size={17} /> : <Archive size={17} />}</span><div><h2 id="session-action-title">{isRename ? "Rename session" : isRestore ? "Restore session" : "Archive session"}</h2><p>{isRename ? "Choose a descriptive name" : isRestore ? "Return this session to the active list" : "Remove this session from the active list"}</p></div><button type="button" aria-label="Close session action dialog" onClick={onClose} disabled={submitting}><X size={17} /></button></div>
       <div className="session-action-content">
-        {isRename ? <label><span>Session name</span><input ref={inputRef} value={name} onChange={(event) => setName(event.target.value)} maxLength={120} required /></label> : <><p>Archive <strong>{session.title}</strong>?</p><span>The session history remains stored locally and is not deleted.</span></>}
+        {isRename ? <label><span>Session name</span><input ref={inputRef} value={name} onChange={(event) => setName(event.target.value)} maxLength={120} required /></label> : <><p>{isRestore ? "Restore" : "Archive"} <strong>{session.title}</strong>?</p><span>{isRestore ? "The session will become available for new Codex messages." : "The session history remains stored locally and is not deleted."}</span></>}
         {error && <div className="dialog-error">{error}</div>}
       </div>
-      <div className="dialog-actions"><button type="button" onClick={onClose} disabled={submitting}>Cancel</button><button className={isRename ? "dialog-create" : "dialog-danger"} type="submit" disabled={submitting || (isRename && !name.trim())}>{submitting && <LoaderCircle size={14} />}{submitting ? (isRename ? "Saving…" : "Archiving…") : (isRename ? "Save name" : "Archive")}</button></div>
+      <div className="dialog-actions"><button type="button" onClick={onClose} disabled={submitting}>Cancel</button><button className={isRename || isRestore ? "dialog-create" : "dialog-danger"} type="submit" disabled={submitting || (isRename && !name.trim())}>{submitting && <LoaderCircle size={14} />}{submitting ? (isRename ? "Saving…" : isRestore ? "Restoring…" : "Archiving…") : (isRename ? "Save name" : isRestore ? "Restore" : "Archive")}</button></div>
     </form>
   </div>;
 }

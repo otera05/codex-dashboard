@@ -3,6 +3,8 @@ import type { Account, ApprovalRequest, DashboardEvent, Session } from "./types"
 
 interface DashboardState {
   sessions: Session[];
+  archivedSessions: Session[];
+  showingArchived: boolean;
   approvals: ApprovalRequest[];
   account: Account;
   connected: boolean;
@@ -17,13 +19,18 @@ interface DashboardState {
   mergeSession: (session: Session) => void;
   addSession: (session: Session) => void;
   removeSession: (id: string) => void;
+  setArchivedSessions: (sessions: Session[]) => void;
+  setShowingArchived: (showing: boolean) => void;
+  archiveSession: (id: string) => void;
+  restoreSession: (session: Session) => void;
   applyEvent: (event: DashboardEvent) => void;
 }
 
 export const useDashboard = create<DashboardState>((set) => ({
-  sessions: [], approvals: [], account: { connected: false }, connected: false, settingsOpen: false,
+  sessions: [], archivedSessions: [], showingArchived: false, approvals: [], account: { connected: false }, connected: false, settingsOpen: false,
   hydrate: (sessions, approvals, account, connected) => set((state) => ({
     sessions,
+    archivedSessions: state.archivedSessions,
     approvals,
     account,
     connected,
@@ -34,13 +41,32 @@ export const useDashboard = create<DashboardState>((set) => ({
   setSessionLoading: (loadingSessionId, sessionError) => set({ loadingSessionId, sessionError }),
   mergeSession: (session) => set((state) => ({
     sessions: state.sessions.map((item) => item.id === session.id ? session : item),
+    archivedSessions: state.archivedSessions.map((item) => item.id === session.id ? session : item),
     loadingSessionId: state.loadingSessionId === session.id ? undefined : state.loadingSessionId,
     sessionError: undefined,
   })),
   addSession: (session) => set((state) => ({
     sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)],
     selectedId: session.id,
+    showingArchived: false,
     settingsOpen: false,
+  })),
+  setArchivedSessions: (archivedSessions) => set({ archivedSessions }),
+  setShowingArchived: (showingArchived) => set((state) => ({
+    showingArchived,
+    selectedId: (showingArchived ? state.archivedSessions : state.sessions)[0]?.id,
+    settingsOpen: false,
+  })),
+  archiveSession: (id) => set((state) => {
+    const archived = state.sessions.find((session) => session.id === id);
+    const sessions = state.sessions.filter((session) => session.id !== id);
+    return { sessions, archivedSessions: archived ? [archived, ...state.archivedSessions.filter((item) => item.id !== id)] : state.archivedSessions, selectedId: state.selectedId === id ? sessions[0]?.id : state.selectedId };
+  }),
+  restoreSession: (session) => set((state) => ({
+    sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)],
+    archivedSessions: state.archivedSessions.filter((item) => item.id !== session.id),
+    showingArchived: false,
+    selectedId: session.id,
   })),
   removeSession: (id) => set((state) => {
     const sessions = state.sessions.filter((session) => session.id !== id);
@@ -56,12 +82,16 @@ export const useDashboard = create<DashboardState>((set) => ({
         const current = state.sessions.find((item) => item.id === session.id);
         return current?.historyLoaded ? { ...session, messages: current.messages, tokenUsage: current.tokenUsage, activeTurnId: current.activeTurnId, historyLoaded: true } : session;
       });
+      const archivedSessions = event.snapshot.archivedSessions ?? state.archivedSessions;
       return {
         sessions,
+        archivedSessions,
         approvals: event.snapshot.approvals ?? [],
         account: event.snapshot.account,
         connected: event.snapshot.connected,
-        selectedId: state.selectedId && sessions.some((session) => session.id === state.selectedId) ? state.selectedId : sessions[0]?.id,
+        selectedId: state.showingArchived
+          ? state.selectedId && archivedSessions.some((session) => session.id === state.selectedId) ? state.selectedId : archivedSessions[0]?.id
+          : state.selectedId && sessions.some((session) => session.id === state.selectedId) ? state.selectedId : sessions[0]?.id,
       };
     }
     if (event.type === "approval.requested") return { approvals: [...state.approvals.filter((item) => item.requestId !== event.approval.requestId), event.approval] };

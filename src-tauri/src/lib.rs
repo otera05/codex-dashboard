@@ -88,6 +88,21 @@ async fn archive_thread(
 }
 
 #[tauri::command]
+async fn list_archived_sessions(
+    server: State<'_, Arc<AppServer>>,
+) -> Result<Vec<Session>, AppServerError> {
+    server.reload_archived_sessions().await
+}
+
+#[tauri::command]
+async fn unarchive_thread(
+    server: State<'_, Arc<AppServer>>,
+    thread_id: String,
+) -> Result<Session, AppServerError> {
+    server.unarchive_thread(&thread_id).await
+}
+
+#[tauri::command]
 async fn send_turn(
     server: State<'_, Arc<AppServer>>,
     thread_id: String,
@@ -208,6 +223,8 @@ pub fn run() {
             create_thread,
             rename_thread,
             archive_thread,
+            list_archived_sessions,
+            unarchive_thread,
             send_turn,
             interrupt_turn,
             resolve_approval,

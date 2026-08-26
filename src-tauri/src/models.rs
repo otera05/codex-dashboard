@@ -108,6 +108,7 @@ pub struct Account {
 #[serde(rename_all = "camelCase")]
 pub struct DashboardSnapshot {
     pub sessions: Vec<Session>,
+    pub archived_sessions: Vec<Session>,
     pub approvals: Vec<ApprovalRequest>,
     pub account: Account,
     pub connected: bool,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Archive, ArrowUp, Bell, BellOff, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Pencil, RotateCcw, Search, Settings, Sparkles, Unplug, UserRound, X } from "lucide-react";
-import { getSession, getSnapshot, interruptTurn, logoutAccount, refreshAccount, sendTurn, startLogin, subscribe } from "./lib/bridge";
+import { getSession, getSnapshot, interruptTurn, listArchivedSessions, logoutAccount, refreshAccount, sendTurn, startLogin, subscribe } from "./lib/bridge";
 import { MessageContent } from "./components/MessageContent";
 import { CommandActivity } from "./components/CommandActivity";
 import { FileChangeActivity } from "./components/FileChangeActivity";
@@ -34,8 +34,8 @@ function relativeTime(timestamp: number) {
   return `${Math.floor(seconds / 3600)}h`;
 }
 
-function Sidebar({ onNewSession, onSessionAction }: { onNewSession: () => void; onSessionAction: (action: "rename" | "archive", session: Session) => void }) {
-  const { sessions, approvals, selectedId, select, account, connected, setSettingsOpen } = useDashboard();
+function Sidebar({ onNewSession, onSessionAction, onArchiveViewChange }: { onNewSession: () => void; onSessionAction: (action: "rename" | "archive" | "restore", session: Session) => void; onArchiveViewChange: (archived: boolean) => void }) {
+  const { sessions, archivedSessions, showingArchived, approvals, selectedId, select, account, connected, setSettingsOpen } = useDashboard();
   const [filters, setFilters] = useState(loadSessionFilters);
   const [menuId, setMenuId] = useState<string>();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -57,7 +57,8 @@ function Sidebar({ onNewSession, onSessionAction }: { onNewSession: () => void; 
     window.addEventListener("keydown", focusSearch);
     return () => window.removeEventListener("keydown", focusSearch);
   }, []);
-  const filtered = useMemo(() => filterSessions(sessions, approvals ?? [], filters), [sessions, approvals, filters]);
+  const displayedSessions = showingArchived ? archivedSessions : sessions;
+  const filtered = useMemo(() => filterSessions(displayedSessions, approvals ?? [], filters), [displayedSessions, approvals, filters]);
   const hasFilters = Boolean(filters.query || filters.status !== "all" || filters.approvalsOnly || filters.sort !== "updated-desc");
   const usage = Math.min(100, Math.max(0, account.usedPercent ?? 0));
   return <aside className="sidebar">
@@ -71,12 +72,13 @@ function Sidebar({ onNewSession, onSessionAction }: { onNewSession: () => void; 
       <select aria-label="Sort sessions" value={filters.sort} onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as SessionFilters["sort"] }))}><option value="updated-desc">Newest</option><option value="updated-asc">Oldest</option><option value="title">Name</option></select>
       {hasFilters && <button className="clear-filters" aria-label="Clear session filters" onClick={() => setFilters(defaultSessionFilters)}><RotateCcw size={12} /></button>}
     </div>
-    <div className="section-title"><span>Sessions</span><span>{filtered.length}/{sessions.length}</span></div>
+    <div className="session-view-tabs"><button className={!showingArchived ? "active" : ""} onClick={() => onArchiveViewChange(false)}>Active</button><button className={showingArchived ? "active" : ""} onClick={() => onArchiveViewChange(true)}>Archived</button></div>
+    <div className="section-title"><span>{showingArchived ? "Archived" : "Sessions"}</span><span>{filtered.length}/{displayedSessions.length}</span></div>
     <nav className="session-list">
       {filtered.map((session) => <div key={session.id} className={`session-item ${selectedId === session.id ? "selected" : ""}`}>
         <button className="session-select" onClick={() => { select(session.id); setMenuId(undefined); }}><span className={`status-dot ${session.status}`} /><span className="session-copy"><strong>{session.title}</strong><span>{statusLabel[session.status]} · {relativeTime(session.updatedAt)}</span></span></button>
         <button className="session-more" aria-label={`Session actions for ${session.title}`} onClick={(event) => { event.stopPropagation(); setMenuId((current) => current === session.id ? undefined : session.id); }}><MoreHorizontal size={16} /></button>
-        {menuId === session.id && <div className="session-menu" onClick={(event) => event.stopPropagation()}><button onClick={() => { setMenuId(undefined); onSessionAction("rename", session); }}><Pencil size={13} /> Rename</button><button className="archive" onClick={() => { setMenuId(undefined); onSessionAction("archive", session); }}><Archive size={13} /> Archive</button></div>}
+        {menuId === session.id && <div className="session-menu" onClick={(event) => event.stopPropagation()}>{showingArchived ? <button onClick={() => { setMenuId(undefined); onSessionAction("restore", session); }}><RotateCcw size={13} /> Restore</button> : <><button onClick={() => { setMenuId(undefined); onSessionAction("rename", session); }}><Pencil size={13} /> Rename</button><button className="archive" onClick={() => { setMenuId(undefined); onSessionAction("archive", session); }}><Archive size={13} /> Archive</button></>}</div>}
       </div>)}
       {!filtered.length && <div className="empty-list">No sessions found</div>}
     </nav>
@@ -96,7 +98,7 @@ function relativeReset(timestamp: number) {
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
-function Workspace({ session, approvals, loading, error }: { session?: Session; approvals: ApprovalRequest[]; loading: boolean; error?: string }) {
+function Workspace({ session, approvals, archived, loading, error }: { session?: Session; approvals: ApprovalRequest[]; archived: boolean; loading: boolean; error?: string }) {
   const [draft, setDraft] = useState("");
   const conversationRef = useRef<HTMLElement>(null);
   const followLatest = useRef(true);
@@ -128,17 +130,18 @@ function Workspace({ session, approvals, loading, error }: { session?: Session; 
       followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
     }}>
       <div className="session-intro"><div className="intro-icon"><Bot size={20} /></div><div><h2>{session.title}</h2><p>Started with {session.model}</p></div></div>
+      {archived && <div className="archived-notice"><Archive size={14} /> Archived sessions are read-only. Restore this session to continue working.</div>}
       {approvals.map((approval) => <ApprovalCard approval={approval} key={String(approval.requestId)} />)}
       {loading ? <div className="history-state"><LoaderCircle size={19} /> Loading session history…</div> : error ? <div className="history-state error">{error}</div> : session.messages.length ? session.messages.map((item) => item.type === "command" ? <CommandActivity key={item.id} item={item} /> : item.type === "fileChange" ? <FileChangeActivity key={item.id} item={item} /> : <article className={`message ${item.role}`} key={item.id}>
         <div className="message-avatar">{item.role === "assistant" ? <Sparkles size={15} /> : <UserRound size={15} />}</div>
         <div className="message-body"><div className="message-meta"><strong>{item.role === "assistant" ? "Codex" : "You"}</strong><span>{relativeTime(item.createdAt)}</span></div><MessageContent text={item.text} />{item.streaming && <span className="cursor" />}</div>
       </article>) : <div className="no-messages">This session has no messages yet.</div>}
     </section>
-    <footer className="composer-wrap">
+    {!archived && <footer className="composer-wrap">
       {session.status === "working" && session.activeTurnId && <div className="running-bar"><span><span className="pulse" /> Codex is working</span><button onClick={() => interruptTurn(session.id, session.activeTurnId!)}><CircleStop size={14} /> Stop</button></div>}
       <div className="composer"><textarea rows={2} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder="Message Codex…" /><div className="composer-bottom"><span>↵ send · ⇧↵ new line</span><button disabled={!draft.trim()} onClick={() => void submit()}><ArrowUp size={17} /></button></div></div>
       <div className="token-summary"><span>{session.model}</span><span>{(session.tokenUsage.input + session.tokenUsage.output).toLocaleString()} tokens</span><span>{session.tokenUsage.cached.toLocaleString()} cached</span></div>
-    </footer>
+    </footer>}
   </main>;
 }
 
@@ -220,14 +223,14 @@ function SettingsView({ notificationsEnabled, notificationError, onNotifications
 }
 
 export function App() {
-  const { sessions, approvals, selectedId, settingsOpen, connected, loadingSessionId, sessionError, hydrate, applyEvent, mergeSession, addSession, removeSession, setSessionLoading } = useDashboard();
+  const { sessions, archivedSessions, showingArchived, approvals, selectedId, settingsOpen, connected, loadingSessionId, sessionError, hydrate, applyEvent, mergeSession, addSession, archiveSession, restoreSession, setArchivedSessions, setShowingArchived, setSessionLoading } = useDashboard();
   const [newSessionOpen, setNewSessionOpen] = useState(false);
-  const [sessionAction, setSessionAction] = useState<{ action: "rename" | "archive"; session: Session }>();
+  const [sessionAction, setSessionAction] = useState<{ action: "rename" | "archive" | "restore"; session: Session }>();
   const [disconnectAccountOpen, setDisconnectAccountOpen] = useState(false);
   const notifications = useDesktopNotifications(sessions, approvals ?? []);
   const applySnapshot = useCallback((snapshot: DashboardSnapshot) => applyEvent({ type: "snapshot", snapshot }), [applyEvent]);
   useEffect(() => { let unsubscribe: () => void = () => undefined; void getSnapshot().then((snapshot) => hydrate(snapshot.sessions, snapshot.approvals ?? [], snapshot.account, snapshot.connected)); void subscribe(applyEvent).then((fn) => { unsubscribe = fn; }); return () => unsubscribe(); }, [hydrate, applyEvent]);
-  const session = useMemo(() => sessions.find((item) => item.id === selectedId), [sessions, selectedId]);
+  const session = useMemo(() => (showingArchived ? archivedSessions : sessions).find((item) => item.id === selectedId), [sessions, archivedSessions, showingArchived, selectedId]);
   useEffect(() => {
     if (!selectedId || !connected || session?.historyLoaded) return;
     let active = true;
@@ -235,7 +238,7 @@ export function App() {
     void getSession(selectedId).then((loaded) => { if (active) mergeSession(loaded); }).catch((error: unknown) => { if (active) setSessionLoading(undefined, error instanceof Error ? error.message : String(error)); });
     return () => { active = false; };
   }, [selectedId, connected, session?.historyLoaded, mergeSession, setSessionLoading]);
-  useSessionSync({ threadId: selectedId, enabled: connected && Boolean(session?.historyLoaded), onSession: mergeSession });
+  useSessionSync({ threadId: selectedId, enabled: !showingArchived && connected && Boolean(session?.historyLoaded), onSession: mergeSession });
   useSessionListSync({ enabled: connected, onSnapshot: applySnapshot });
   useEffect(() => {
     const openNewSession = (event: KeyboardEvent) => {
@@ -248,5 +251,5 @@ export function App() {
     return () => window.removeEventListener("keydown", openNewSession);
   }, []);
   const sessionApprovals = (approvals ?? []).filter((approval) => approval.threadId === selectedId);
-  return <div className="app-shell"><Sidebar onNewSession={() => setNewSessionOpen(true)} onSessionAction={(action, target) => setSessionAction({ action, session: target })} />{settingsOpen ? <SettingsView notificationsEnabled={notifications.enabled} notificationError={notifications.permissionError} onNotificationsChange={notifications.setEnabled} onDisconnectAccount={() => setDisconnectAccountOpen(true)} /> : <Workspace session={session} approvals={sessionApprovals} loading={loadingSessionId === selectedId} error={sessionError} />}{newSessionOpen && <NewSessionDialog defaultCwd={session?.cwd ?? ""} defaultModel={session?.model} onClose={() => setNewSessionOpen(false)} onCreated={(created) => { addSession(created); setNewSessionOpen(false); }} />}{sessionAction && <SessionActionDialog action={sessionAction.action} session={sessionAction.session} onClose={() => setSessionAction(undefined)} onRenamed={(renamed) => { mergeSession(renamed); setSessionAction(undefined); }} onArchived={(id) => { removeSession(id); setSessionAction(undefined); }} />}{disconnectAccountOpen && <DisconnectAccountDialog onClose={() => setDisconnectAccountOpen(false)} onDisconnected={() => setDisconnectAccountOpen(false)} />}</div>;
+  return <div className="app-shell"><Sidebar onNewSession={() => setNewSessionOpen(true)} onSessionAction={(action, target) => setSessionAction({ action, session: target })} onArchiveViewChange={(archived) => { if (archived) void listArchivedSessions().then((items) => { setArchivedSessions(items); setShowingArchived(true); }); else setShowingArchived(false); }} />{settingsOpen ? <SettingsView notificationsEnabled={notifications.enabled} notificationError={notifications.permissionError} onNotificationsChange={notifications.setEnabled} onDisconnectAccount={() => setDisconnectAccountOpen(true)} /> : <Workspace session={session} approvals={sessionApprovals} archived={showingArchived} loading={loadingSessionId === selectedId} error={sessionError} />}{newSessionOpen && <NewSessionDialog defaultCwd={session?.cwd ?? ""} defaultModel={session?.model} onClose={() => setNewSessionOpen(false)} onCreated={(created) => { addSession(created); setNewSessionOpen(false); }} />}{sessionAction && <SessionActionDialog action={sessionAction.action} session={sessionAction.session} onClose={() => setSessionAction(undefined)} onRenamed={(renamed) => { mergeSession(renamed); setSessionAction(undefined); }} onArchived={(id) => { archiveSession(id); setSessionAction(undefined); }} onRestored={(restored) => { restoreSession(restored); setSessionAction(undefined); }} />}{disconnectAccountOpen && <DisconnectAccountDialog onClose={() => setDisconnectAccountOpen(false)} onDisconnected={() => setDisconnectAccountOpen(false)} />}</div>;
 }

@@ -84,6 +84,7 @@ export interface CodexModel {
 
 export interface DashboardSnapshot {
   sessions: Session[];
+  archivedSessions?: Session[];
   approvals?: ApprovalRequest[];
   account: Account;
   connected: boolean;

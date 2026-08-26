@@ -18,6 +18,8 @@ describe("dashboard session list updates", () => {
   beforeEach(() => {
     useDashboard.setState({
       sessions: [],
+      archivedSessions: [],
+      showingArchived: false,
       approvals: [],
       account: { connected: false },
       connected: false,
@@ -80,12 +82,18 @@ describe("dashboard session list updates", () => {
     expect(useDashboard.getState().selectedId).toBe("created");
   });
 
-  it("removes an archived session and selects the next one", () => {
+  it("moves sessions between active and archived lists", () => {
     useDashboard.setState({ sessions: [session("archived"), session("remaining")], selectedId: "archived" });
 
-    useDashboard.getState().removeSession("archived");
+    useDashboard.getState().archiveSession("archived");
 
     expect(useDashboard.getState().sessions.map(({ id }) => id)).toEqual(["remaining"]);
+    expect(useDashboard.getState().archivedSessions.map(({ id }) => id)).toEqual(["archived"]);
     expect(useDashboard.getState().selectedId).toBe("remaining");
+
+    useDashboard.getState().restoreSession(session("archived", true));
+    expect(useDashboard.getState().sessions.map(({ id }) => id)).toEqual(["archived", "remaining"]);
+    expect(useDashboard.getState().archivedSessions).toEqual([]);
+    expect(useDashboard.getState().selectedId).toBe("archived");
   });
 });
