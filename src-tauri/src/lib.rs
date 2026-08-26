@@ -2,10 +2,12 @@ mod app_server;
 mod models;
 
 use app_server::{AppServer, AppServerError};
-use models::{CodexModel, DashboardSnapshot, Session};
+use models::{Account, CodexModel, DashboardSnapshot, Session};
 use serde_json::{json, Value};
+use std::process::Command as ProcessCommand;
 use std::sync::Arc;
 use tauri::State;
+use url::Url;
 
 #[tauri::command]
 async fn get_dashboard_snapshot(
@@ -35,6 +37,14 @@ async fn refresh_session_list(
     server: State<'_, Arc<AppServer>>,
 ) -> Result<DashboardSnapshot, AppServerError> {
     server.reload_sessions().await
+}
+
+#[tauri::command]
+async fn refresh_account(
+    app: tauri::AppHandle,
+    server: State<'_, Arc<AppServer>>,
+) -> Result<Account, AppServerError> {
+    server.refresh_account(&app).await
 }
 
 #[tauri::command]
@@ -109,19 +119,58 @@ async fn resolve_approval(
 
 #[tauri::command]
 async fn start_chatgpt_login(
+    app: tauri::AppHandle,
     server: State<'_, Arc<AppServer>>,
 ) -> Result<Option<String>, AppServerError> {
     let response = server
-        .request(
+        .request_with_reconnect(
+            &app,
             "account/login/start",
             json!({ "type": "chatgpt", "useHostedLoginSuccessPage": true, "appBrand": "codex" }),
         )
         .await?;
-    Ok(response
+    let auth_url = response
         .get("authUrl")
         .or_else(|| response.get("url"))
         .and_then(Value::as_str)
-        .map(str::to_owned))
+        .map(str::to_owned);
+    if let Some(url) = auth_url.as_deref() {
+        open_external_url(url)?;
+    }
+    Ok(auth_url)
+}
+
+fn open_external_url(url: &str) -> Result<(), AppServerError> {
+    let parsed = Url::parse(url).map_err(|error| AppServerError::Rpc(error.to_string()))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(AppServerError::Rpc(
+            "Login URL must use http or https".to_owned(),
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = ProcessCommand::new("open");
+        command.arg(url);
+        command
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = ProcessCommand::new("cmd");
+        command.args(["/C", "start", "", url]);
+        command
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = ProcessCommand::new("xdg-open");
+        command.arg(url);
+        command
+    };
+
+    command.spawn()?;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -145,6 +194,7 @@ pub fn run() {
             get_session,
             refresh_session,
             refresh_session_list,
+            refresh_account,
             list_models,
             create_thread,
             rename_thread,

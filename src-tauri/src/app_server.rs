@@ -1,6 +1,8 @@
 use std::{
-    collections::HashMap,
-    process::Stdio,
+    collections::{HashMap, VecDeque},
+    env,
+    path::{Path, PathBuf},
+    process::{Command as StdCommand, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -17,8 +19,8 @@ use tokio::{
 };
 
 use crate::models::{
-    apply_turn_history, merge_turn_history, parse_account, parse_sessions, ApprovalRequest,
-    CodexModel, DashboardSnapshot, RpcEnvelope, Session,
+    apply_turn_history, merge_turn_history, parse_account, parse_sessions, Account,
+    ApprovalRequest, CodexModel, DashboardSnapshot, RpcEnvelope, Session,
 };
 
 #[derive(Debug, Error)]
@@ -27,8 +29,23 @@ pub enum AppServerError {
     Io(#[from] std::io::Error),
     #[error("Codex App Server returned an error: {0}")]
     Rpc(String),
-    #[error("Codex App Server disconnected")]
-    Disconnected,
+    #[error("Codex App Server disconnected{0}")]
+    Disconnected(String),
+}
+
+impl AppServerError {
+    fn disconnected() -> Self {
+        Self::Disconnected(String::new())
+    }
+
+    fn disconnected_with_details(details: &str) -> Self {
+        let details = details.trim();
+        if details.is_empty() {
+            Self::disconnected()
+        } else {
+            Self::Disconnected(format!(": {details}"))
+        }
+    }
 }
 
 impl serde::Serialize for AppServerError {
@@ -47,6 +64,8 @@ pub struct AppServer {
     stdin: Mutex<Option<ChildStdin>>,
     pending: Pending,
     next_id: AtomicU64,
+    connection_generation: AtomicU64,
+    diagnostics: Mutex<VecDeque<String>>,
     pub snapshot: RwLock<DashboardSnapshot>,
 }
 
@@ -57,21 +76,36 @@ impl AppServer {
             stdin: Mutex::new(None),
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU64::new(1),
+            connection_generation: AtomicU64::new(0),
+            diagnostics: Mutex::new(VecDeque::new()),
             snapshot: RwLock::new(DashboardSnapshot::default()),
         })
     }
 
     pub async fn connect(self: &Arc<Self>, app: AppHandle) -> Result<(), AppServerError> {
-        let mut command = Command::new("codex");
+        let generation = self.connection_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        self.disconnect().await;
+        self.clear_diagnostics().await;
+        let codex_path = resolve_codex_binary().map_err(AppServerError::Rpc)?;
+        self.record_diagnostic("launch", &format!("using {}", codex_path.display()))
+            .await;
+        let mut command = Command::new(codex_path);
         command
             .args(["app-server", "--stdio"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         let mut child = command.spawn()?;
-        let stdin = child.stdin.take().ok_or(AppServerError::Disconnected)?;
-        let stdout = child.stdout.take().ok_or(AppServerError::Disconnected)?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(AppServerError::disconnected)?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(AppServerError::disconnected)?;
+        let stderr = child.stderr.take();
         *self.stdin.lock().await = Some(stdin);
         *self.child.lock().await = Some(child);
 
@@ -82,6 +116,7 @@ impl AppServer {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 let Ok(envelope) = serde_json::from_str::<RpcEnvelope>(&line) else {
+                    server.record_diagnostic("stdout", &line).await;
                     continue;
                 };
                 if let Some(method) = envelope.method {
@@ -113,17 +148,91 @@ impl AppServer {
                     }
                 }
             }
-            server.snapshot.write().await.connected = false;
-            let _ = event_app.emit(
-                "dashboard-event",
-                json!({ "type": "connection.changed", "connected": false }),
-            );
+            if server.connection_generation.load(Ordering::Relaxed) == generation {
+                server.record_diagnostic("stdio", "stdout closed").await;
+                server.mark_disconnected(&event_app).await;
+            }
         });
+
+        if let Some(stderr) = stderr {
+            let server = Arc::clone(self);
+            tauri::async_runtime::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    server.record_diagnostic("stderr", &line).await;
+                }
+            });
+        }
 
         self.request("initialize", json!({ "clientInfo": { "name": "codex-dashboard", "title": "Codex Dashboard", "version": env!("CARGO_PKG_VERSION") }, "capabilities": { "experimentalApi": true } })).await?;
         self.write_notification("initialized", json!({})).await?;
         self.refresh(&app).await?;
         Ok(())
+    }
+
+    async fn disconnect(&self) {
+        *self.stdin.lock().await = None;
+        if let Some(mut child) = self.child.lock().await.take() {
+            let _ = child.start_kill();
+        }
+        self.reject_pending_as_disconnected().await;
+    }
+
+    async fn mark_disconnected(&self, app: &AppHandle) {
+        *self.stdin.lock().await = None;
+        *self.child.lock().await = None;
+        self.reject_pending_with_diagnostics().await;
+        self.snapshot.write().await.connected = false;
+        let _ = app.emit(
+            "dashboard-event",
+            json!({ "type": "connection.changed", "connected": false }),
+        );
+    }
+
+    async fn reject_pending_as_disconnected(&self) {
+        let mut pending = self.pending.lock().await;
+        for (_, sender) in pending.drain() {
+            let _ = sender.send(Err(AppServerError::disconnected()));
+        }
+    }
+
+    async fn reject_pending_with_diagnostics(&self) {
+        let details = self.diagnostic_details().await;
+        let mut pending = self.pending.lock().await;
+        for (_, sender) in pending.drain() {
+            let _ = sender.send(Err(AppServerError::disconnected_with_details(&details)));
+        }
+    }
+
+    async fn disconnected_error(&self) -> AppServerError {
+        AppServerError::disconnected_with_details(&self.diagnostic_details().await)
+    }
+
+    async fn clear_diagnostics(&self) {
+        self.diagnostics.lock().await.clear();
+    }
+
+    async fn record_diagnostic(&self, source: &str, line: &str) {
+        let line = line.trim();
+        if line.is_empty() {
+            return;
+        }
+        eprintln!("Codex App Server {source}: {line}");
+        let mut diagnostics = self.diagnostics.lock().await;
+        if diagnostics.len() >= 12 {
+            diagnostics.pop_front();
+        }
+        diagnostics.push_back(format!("{source}: {line}"));
+    }
+
+    async fn diagnostic_details(&self) -> String {
+        self.diagnostics
+            .lock()
+            .await
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, AppServerError> {
@@ -138,13 +247,34 @@ impl AppServer {
         let result = if let Some(stdin) = self.stdin.lock().await.as_mut() {
             stdin.write_all(message.as_bytes()).await
         } else {
-            return Err(AppServerError::Disconnected);
+            return Err(self.disconnected_error().await);
         };
         if let Err(error) = result {
             self.pending.lock().await.remove(&id);
+            if error.kind() == std::io::ErrorKind::BrokenPipe {
+                return Err(self.disconnected_error().await);
+            }
             return Err(error.into());
         }
-        receiver.await.map_err(|_| AppServerError::Disconnected)?
+        match receiver.await {
+            Ok(result) => result,
+            Err(_) => Err(self.disconnected_error().await),
+        }
+    }
+
+    pub async fn request_with_reconnect(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, AppServerError> {
+        match self.request(method, params.clone()).await {
+            Err(AppServerError::Disconnected(_)) => {
+                self.connect(app.clone()).await?;
+                self.request(method, params).await
+            }
+            result => result,
+        }
     }
 
     async fn handle_server_request(
@@ -291,7 +421,7 @@ impl AppServer {
             .lock()
             .await
             .as_mut()
-            .ok_or(AppServerError::Disconnected)?
+            .ok_or_else(AppServerError::disconnected)?
             .write_all(message.as_bytes())
             .await?;
         Ok(())
@@ -533,6 +663,27 @@ impl AppServer {
         Ok(snapshot.clone())
     }
 
+    pub async fn refresh_account(
+        self: &Arc<Self>,
+        app: &AppHandle,
+    ) -> Result<Account, AppServerError> {
+        let account_result = self
+            .request_with_reconnect(app, "account/read", json!({ "refreshToken": true }))
+            .await
+            .unwrap_or(Value::Null);
+        let rates = self
+            .request_with_reconnect(app, "account/rateLimits/read", json!({}))
+            .await
+            .unwrap_or(Value::Null);
+        let account = parse_account(&account_result, &rates);
+        self.snapshot.write().await.account = account.clone();
+        let _ = app.emit(
+            "dashboard-event",
+            json!({ "type": "account.updated", "account": account }),
+        );
+        Ok(account)
+    }
+
     async fn write_notification(&self, method: &str, params: Value) -> Result<(), AppServerError> {
         let message =
             serde_json::to_string(&json!({ "jsonrpc": "2.0", "method": method, "params": params }))
@@ -542,7 +693,7 @@ impl AppServer {
             .lock()
             .await
             .as_mut()
-            .ok_or(AppServerError::Disconnected)?
+            .ok_or_else(AppServerError::disconnected)?
             .write_all(message.as_bytes())
             .await?;
         Ok(())
@@ -550,14 +701,8 @@ impl AppServer {
 
     async fn refresh(&self, app: &AppHandle) -> Result<(), AppServerError> {
         self.reload_sessions().await?;
-        let account_result = self
-            .request("account/read", json!({ "refreshToken": false }))
-            .await
-            .unwrap_or(Value::Null);
-        let rates = self
-            .request("account/rateLimits/read", json!({}))
-            .await
-            .unwrap_or(Value::Null);
+        let account_result = self.read_account(false).await;
+        let rates = self.read_rate_limits().await;
         let mut snapshot = self.snapshot.write().await;
         snapshot.account = parse_account(&account_result, &rates);
         snapshot.connected = true;
@@ -566,6 +711,18 @@ impl AppServer {
             json!({ "type": "snapshot", "snapshot": &*snapshot }),
         );
         Ok(())
+    }
+
+    async fn read_account(&self, refresh_token: bool) -> Value {
+        self.request("account/read", json!({ "refreshToken": refresh_token }))
+            .await
+            .unwrap_or(Value::Null)
+    }
+
+    async fn read_rate_limits(&self) -> Value {
+        self.request("account/rateLimits/read", json!({}))
+            .await
+            .unwrap_or(Value::Null)
     }
 
     fn preserve_loaded_history(previous_sessions: &[Session], sessions: &mut [Session]) {
@@ -612,4 +769,78 @@ fn string_field(value: &Value, field: &str) -> String {
 
 fn optional_string_field(value: &Value, field: &str) -> Option<String> {
     value.get(field).and_then(Value::as_str).map(str::to_owned)
+}
+
+fn resolve_codex_binary() -> Result<PathBuf, String> {
+    if let Some(path) = env::var_os("CODEX_DASHBOARD_CODEX").filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(path);
+        return if supports_app_server(&path) {
+            Ok(path)
+        } else {
+            Err(format!(
+                "CODEX_DASHBOARD_CODEX does not support `codex app-server`: {}",
+                path.display()
+            ))
+        };
+    }
+
+    let mut rejected = Vec::new();
+    for candidate in codex_candidates() {
+        if supports_app_server(&candidate) {
+            return Ok(candidate);
+        }
+        rejected.push(candidate.display().to_string());
+    }
+
+    Err(if rejected.is_empty() {
+        "No codex binary found on PATH".to_owned()
+    } else {
+        format!(
+            "No codex binary on PATH supports `codex app-server`. Checked: {}",
+            rejected.join(", ")
+        )
+    })
+}
+
+fn codex_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(paths) = env::var_os("PATH") {
+        for directory in env::split_paths(&paths) {
+            let candidate = directory.join(executable_name("codex"));
+            if is_executable_file(&candidate) && !candidates.iter().any(|item| item == &candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
+}
+
+fn supports_app_server(path: &Path) -> bool {
+    let Ok(output) = StdCommand::new(path)
+        .args(["app-server", "--help"])
+        .stdin(Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.contains("Usage: codex app-server") && stdout.contains("--stdio")
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
+fn executable_name(name: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        format!("{name}.exe")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        name.to_owned()
+    }
 }

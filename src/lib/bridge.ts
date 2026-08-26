@@ -1,4 +1,4 @@
-import type { CodexModel, DashboardEvent, DashboardSnapshot, Session } from "../types";
+import type { Account, CodexModel, DashboardEvent, DashboardSnapshot, Session } from "../types";
 
 const demoSnapshot: DashboardSnapshot = {
   connected: false,
@@ -50,6 +50,15 @@ export async function refreshSessionList(): Promise<DashboardSnapshot> {
   if (!isTauri()) return getSnapshot();
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<DashboardSnapshot>("refresh_session_list");
+}
+
+export async function refreshAccount(): Promise<Account> {
+  if (!isTauri()) {
+    demoSnapshot.account = { ...demoSnapshot.account, connected: true };
+    return demoSnapshot.account;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Account>("refresh_account");
 }
 
 export async function listModels(): Promise<CodexModel[]> {

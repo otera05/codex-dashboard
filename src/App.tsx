@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Archive, ArrowUp, Bell, BellOff, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Pencil, Search, Settings, Sparkles, Unplug, UserRound } from "lucide-react";
-import { getSession, getSnapshot, interruptTurn, sendTurn, startLogin, subscribe } from "./lib/bridge";
+import { getSession, getSnapshot, interruptTurn, refreshAccount, sendTurn, startLogin, subscribe } from "./lib/bridge";
 import { MessageContent } from "./components/MessageContent";
 import { CommandActivity } from "./components/CommandActivity";
 import { FileChangeActivity } from "./components/FileChangeActivity";
@@ -61,6 +61,8 @@ function relativeReset(timestamp: number) {
   return minutes >= 60 ? `in ${Math.floor(minutes / 60)}h ${minutes % 60}m` : `in ${minutes}m`;
 }
 
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
 function Workspace({ session, approvals, loading, error }: { session?: Session; approvals: ApprovalRequest[]; loading: boolean; error?: string }) {
   const [draft, setDraft] = useState("");
   const conversationRef = useRef<HTMLElement>(null);
@@ -108,11 +110,48 @@ function Workspace({ session, approvals, loading, error }: { session?: Session; 
 }
 
 function SettingsView({ notificationsEnabled, notificationError, onNotificationsChange }: { notificationsEnabled: boolean; notificationError?: string; onNotificationsChange: (enabled: boolean) => Promise<boolean> }) {
-  const { account, connected, setSettingsOpen } = useDashboard();
-  const [loggingIn, setLoggingIn] = useState(false);
-  const login = async () => { setLoggingIn(true); try { const url = await startLogin(); if (url) window.open(url, "_blank"); } finally { setLoggingIn(false); } };
+  const { account, connected, setSettingsOpen, applyEvent } = useDashboard();
+  const [loginState, setLoginState] = useState<"idle" | "starting" | "waiting">("idle");
+  const [loginError, setLoginError] = useState<string>();
+  const [loginMessage, setLoginMessage] = useState<string>();
+  const loginAttempt = useRef(0);
+  useEffect(() => () => { loginAttempt.current += 1; }, []);
+  const login = async () => {
+    const attempt = loginAttempt.current + 1;
+    loginAttempt.current = attempt;
+    const isCurrent = () => loginAttempt.current === attempt;
+    setLoginState("starting");
+    setLoginError(undefined);
+    setLoginMessage(undefined);
+    try {
+      await startLogin();
+      if (!isCurrent()) return;
+      setLoginState("waiting");
+      setLoginMessage("Complete the ChatGPT sign-in in your browser.");
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        const refreshed = await refreshAccount();
+        applyEvent({ type: "account.updated", account: refreshed });
+        if (!isCurrent()) return;
+        if (refreshed.connected) {
+          setLoginMessage("ChatGPT account connected.");
+          setLoginState("idle");
+          return;
+        }
+        await sleep(2_000);
+        if (!isCurrent()) return;
+      }
+      setLoginMessage("Still waiting for ChatGPT sign-in to complete.");
+      setLoginState("idle");
+    } catch (cause) {
+      if (!isCurrent()) return;
+      setLoginError(cause instanceof Error ? cause.message : String(cause));
+      setLoginState("idle");
+    }
+  };
+  const loginButtonText = loginState === "starting" ? "Opening…" : loginState === "waiting" ? "Waiting…" : account.connected ? "Reconnect" : "Connect";
   return <main className="workspace settings-view"><header className="workspace-header"><div><h1>Account & usage</h1><p>Manage your Codex connection</p></div><button className="subtle-button" onClick={() => setSettingsOpen(false)}>Done</button></header>
-    <div className="settings-content"><section className="settings-section"><h2>ChatGPT account</h2><div className="settings-card"><span className="large-avatar"><UserRound size={22} /></span><div className="settings-account"><strong>{account.email ?? "No account connected"}</strong><span>{account.plan ? `ChatGPT ${account.plan}` : "Connect an account to use Codex"}</span></div><button className="primary-button" onClick={() => void login()} disabled={loggingIn}><LogIn size={15} /> {loggingIn ? "Opening…" : account.connected ? "Reconnect" : "Connect"}</button></div></section>
+    <div className="settings-content"><section className="settings-section"><h2>ChatGPT account</h2><div className="settings-card"><span className="large-avatar"><UserRound size={22} /></span><div className="settings-account"><strong>{account.email ?? "No account connected"}</strong><span>{loginMessage ?? (account.plan ? `ChatGPT ${account.plan}` : "Connect an account to use Codex")}</span>{loginError && <em className="settings-error">{loginError}</em>}</div><button className="primary-button" onClick={() => void login()} disabled={loginState !== "idle"}><LogIn size={15} /> {loginButtonText}</button></div></section>
     <section className="settings-section"><h2>Connection</h2><div className="settings-card compact"><span className={`connection-icon ${connected ? "online" : ""}`}>{connected ? <Activity size={19} /> : <Unplug size={19} />}</span><div className="settings-account"><strong>Codex App Server</strong><span>{connected ? "Connected and receiving live events" : "Not connected — dashboard is showing preview data"}</span></div><span className={`connection-label ${connected ? "online" : ""}`}>{connected ? "Online" : "Offline"}</span></div></section>
     <section className="settings-section"><h2>Notifications</h2><div className="settings-card compact"><span className={`connection-icon ${notificationsEnabled ? "online" : ""}`}>{notificationsEnabled ? <Bell size={19} /> : <BellOff size={19} />}</span><div className="settings-account"><strong>Desktop notifications</strong><span>Notify when Codex finishes, needs approval, or encounters an error</span>{notificationError && <em className="settings-error">{notificationError}</em>}</div><button className={`toggle ${notificationsEnabled ? "on" : ""}`} role="switch" aria-checked={notificationsEnabled} aria-label="Desktop notifications" onClick={() => void onNotificationsChange(!notificationsEnabled)}><span /></button></div></section>
     <section className="settings-section"><h2>Usage window</h2><div className="usage-large"><div><span>Current usage</span><strong>{account.usedPercent == null ? "—" : `${Math.round(account.usedPercent)}%`}</strong></div><div className="usage-track"><span style={{ width: `${account.usedPercent ?? 0}%` }} /></div><p><Clock3 size={14} /> {account.resetsAt ? `Resets ${relativeReset(account.resetsAt)}` : "Reset time is unavailable"}</p></div></section></div>

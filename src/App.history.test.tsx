@@ -11,6 +11,7 @@ const bridge = vi.hoisted(() => ({
   subscribe: vi.fn(),
   sendTurn: vi.fn(),
   interruptTurn: vi.fn(),
+  refreshAccount: vi.fn(),
   startLogin: vi.fn(),
 }));
 
