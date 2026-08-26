@@ -684,6 +684,21 @@ impl AppServer {
         Ok(account)
     }
 
+    pub async fn logout_account(
+        self: &Arc<Self>,
+        app: &AppHandle,
+    ) -> Result<Account, AppServerError> {
+        self.request_with_reconnect(app, "account/logout", Value::Null)
+            .await?;
+        let account = Account::default();
+        self.snapshot.write().await.account = account.clone();
+        let _ = app.emit(
+            "dashboard-event",
+            json!({ "type": "account.updated", "account": account }),
+        );
+        Ok(account)
+    }
+
     async fn write_notification(&self, method: &str, params: Value) -> Result<(), AppServerError> {
         let message =
             serde_json::to_string(&json!({ "jsonrpc": "2.0", "method": method, "params": params }))

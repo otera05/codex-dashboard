@@ -48,6 +48,14 @@ async fn refresh_account(
 }
 
 #[tauri::command]
+async fn logout_account(
+    app: tauri::AppHandle,
+    server: State<'_, Arc<AppServer>>,
+) -> Result<Account, AppServerError> {
+    server.logout_account(&app).await
+}
+
+#[tauri::command]
 async fn list_models(server: State<'_, Arc<AppServer>>) -> Result<Vec<CodexModel>, AppServerError> {
     server.list_models().await
 }
@@ -195,6 +203,7 @@ pub fn run() {
             refresh_session,
             refresh_session_list,
             refresh_account,
+            logout_account,
             list_models,
             create_thread,
             rename_thread,

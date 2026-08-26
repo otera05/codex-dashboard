@@ -61,6 +61,15 @@ export async function refreshAccount(): Promise<Account> {
   return invoke<Account>("refresh_account");
 }
 
+export async function logoutAccount(): Promise<Account> {
+  if (!isTauri()) {
+    demoSnapshot.account = { connected: false };
+    return demoSnapshot.account;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Account>("logout_account");
+}
+
 export async function listModels(): Promise<CodexModel[]> {
   if (!isTauri()) return [
     { id: "gpt-5.6-codex", displayName: "GPT-5.6 Codex", description: "Frontier coding model", isDefault: true },

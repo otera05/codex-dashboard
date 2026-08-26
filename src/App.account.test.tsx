@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardSnapshot } from "./types";
 
@@ -12,6 +12,7 @@ const bridge = vi.hoisted(() => ({
   sendTurn: vi.fn(),
   interruptTurn: vi.fn(),
   refreshAccount: vi.fn(),
+  logoutAccount: vi.fn(),
   startLogin: vi.fn(),
 }));
 
@@ -29,6 +30,7 @@ const snapshot: DashboardSnapshot = {
 
 describe("account connection", () => {
   beforeEach(() => {
+    cleanup();
     vi.clearAllMocks();
     useDashboard.setState({
       sessions: [],
@@ -49,6 +51,7 @@ describe("account connection", () => {
       email: "signed-in@example.test",
       plan: "Plus",
     });
+    bridge.logoutAccount.mockResolvedValue({ connected: false });
   });
 
   it("starts browser sign-in and refreshes the displayed account", async () => {
@@ -66,5 +69,29 @@ describe("account connection", () => {
 
     expect((await screen.findAllByText("signed-in@example.test")).length).toBeGreaterThan(0);
     expect(screen.getByText("ChatGPT account connected.")).toBeInTheDocument();
+  });
+
+  it("disconnects the signed-in account after confirmation", async () => {
+    bridge.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      account: { connected: true, email: "signed-in@example.test", plan: "Plus" },
+    });
+
+    render(<App />);
+
+    await act(async () => undefined);
+
+    fireEvent.click(screen.getByRole("button", { name: /signed-in@example.test/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    const dialog = screen.getByRole("dialog", { name: "Disconnect ChatGPT" });
+    expect(dialog).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+    });
+
+    expect(bridge.logoutAccount).toHaveBeenCalledOnce();
+    expect(await screen.findByText("No account connected")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Disconnect ChatGPT" })).not.toBeInTheDocument();
   });
 });
