@@ -57,6 +57,10 @@ impl serde::Serialize for AppServerError {
     }
 }
 
+fn is_unmaterialized_thread_error(error: &AppServerError) -> bool {
+    matches!(error, AppServerError::Rpc(message) if message.contains("is not materialized yet") && message.contains("thread/turns/list"))
+}
+
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, AppServerError>>>>>;
 
 pub struct AppServer {
@@ -432,7 +436,7 @@ impl AppServer {
         let mut cursor: Option<String> = None;
 
         for _ in 0..10 {
-            let response = self
+            let response = match self
                 .request(
                     "thread/turns/list",
                     json!({
@@ -443,7 +447,12 @@ impl AppServer {
                         "itemsView": "full"
                     }),
                 )
-                .await?;
+                .await
+            {
+                Ok(response) => response,
+                Err(error) if is_unmaterialized_thread_error(&error) => json!({ "data": [] }),
+                Err(error) => return Err(error),
+            };
             if let Some(page) = response.get("data").and_then(Value::as_array) {
                 turns.extend(page.iter().cloned());
             }
@@ -561,6 +570,8 @@ impl AppServer {
         }
         if !prompt.trim().is_empty() {
             session.status = "working".to_owned();
+        } else {
+            session.history_loaded = true;
         }
         let mut snapshot = self.snapshot.write().await;
         snapshot.sessions.retain(|item| item.id != thread_id);
@@ -677,7 +688,7 @@ impl AppServer {
     }
 
     pub async fn refresh_session(&self, thread_id: &str) -> Result<Session, AppServerError> {
-        let response = self
+        let response = match self
             .request(
                 "thread/turns/list",
                 json!({
@@ -687,7 +698,12 @@ impl AppServer {
                     "itemsView": "full"
                 }),
             )
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) if is_unmaterialized_thread_error(&error) => json!({ "data": [] }),
+            Err(error) => return Err(error),
+        };
         let mut turns = response
             .get("data")
             .and_then(Value::as_array)
@@ -936,6 +952,22 @@ fn supports_app_server(path: &Path) -> bool {
 
 fn is_executable_file(path: &Path) -> bool {
     path.is_file()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_unmaterialized_thread_history_errors() {
+        let error = AppServerError::Rpc(
+            r#"{"code":-32600,"message":"thread abc is not materialized yet; thread/turns/list is unavailable before first user message"}"#.to_owned(),
+        );
+        assert!(is_unmaterialized_thread_error(&error));
+        assert!(!is_unmaterialized_thread_error(&AppServerError::Rpc(
+            r#"{"code":-32600,"message":"another request failed"}"#.to_owned(),
+        )));
+    }
 }
 
 fn executable_name(name: &str) -> String {
