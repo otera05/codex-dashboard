@@ -7,6 +7,7 @@ import { FileChangeActivity } from "./components/FileChangeActivity";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { NewSessionDialog } from "./components/NewSessionDialog";
 import { SessionActionDialog } from "./components/SessionActionDialog";
+import { SessionActivityPanel } from "./components/SessionActivityPanel";
 import { useSessionSync } from "./hooks/useSessionSync";
 import { useSessionListSync } from "./hooks/useSessionListSync";
 import { useDesktopNotifications } from "./hooks/useDesktopNotifications";
@@ -100,6 +101,7 @@ const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve
 
 function Workspace({ session, approvals, archived, loading, error }: { session?: Session; approvals: ApprovalRequest[]; archived: boolean; loading: boolean; error?: string }) {
   const [draft, setDraft] = useState("");
+  const [activityOpen, setActivityOpen] = useState(false);
   const conversationRef = useRef<HTMLElement>(null);
   const followLatest = useRef(true);
   const messageVersion = session?.messages.map((item) => {
@@ -123,7 +125,7 @@ function Workspace({ session, approvals, archived, loading, error }: { session?:
   return <main className="workspace">
     <header className="workspace-header">
       <div><div className="title-line"><h1>{session.title}</h1><span className={`status-pill ${session.status}`}><i />{statusLabel[session.status]}</span></div><p><Folder size={13} /> {session.cwd}</p></div>
-      <div className="header-actions"><button className="subtle-button"><Activity size={15} /> Activity</button><button className="icon-button"><MoreHorizontal size={18} /></button></div>
+      <div className="header-actions"><button className="subtle-button" onClick={() => setActivityOpen(true)}><Activity size={15} /> Activity</button><button className="icon-button"><MoreHorizontal size={18} /></button></div>
     </header>
     <section className="conversation" ref={conversationRef} onScroll={(event) => {
       const element = event.currentTarget;
@@ -142,6 +144,7 @@ function Workspace({ session, approvals, archived, loading, error }: { session?:
       <div className="composer"><textarea rows={2} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder="Message Codex…" /><div className="composer-bottom"><span>↵ send · ⇧↵ new line</span><button disabled={!draft.trim()} onClick={() => void submit()}><ArrowUp size={17} /></button></div></div>
       <div className="token-summary"><span>{session.model}</span><span>{(session.tokenUsage.input + session.tokenUsage.output).toLocaleString()} tokens</span><span>{session.tokenUsage.cached.toLocaleString()} cached</span></div>
     </footer>}
+    {activityOpen && <SessionActivityPanel session={session} onClose={() => setActivityOpen(false)} />}
   </main>;
 }
 
