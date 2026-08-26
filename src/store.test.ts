@@ -21,6 +21,7 @@ describe("dashboard session list updates", () => {
       archivedSessions: [],
       showingArchived: false,
       approvals: [],
+      unreadCounts: {},
       account: { connected: false },
       connected: false,
       selectedId: undefined,
@@ -68,9 +69,22 @@ describe("dashboard session list updates", () => {
 
     useDashboard.getState().applyEvent({ type: "approval.requested", approval });
     expect(useDashboard.getState().approvals).toEqual([approval]);
+    expect(useDashboard.getState().unreadCounts["thread-1"]).toBe(1);
 
     useDashboard.getState().applyEvent({ type: "approval.resolved", requestId: 12 });
     expect(useDashboard.getState().approvals).toEqual([]);
+  });
+
+  it("tracks activity on background sessions and clears it when selected", () => {
+    useDashboard.setState({ sessions: [session("selected"), session("background")], selectedId: "selected" });
+    useDashboard.getState().applyEvent({
+      type: "snapshot",
+      snapshot: { connected: true, approvals: [], account: { connected: true }, sessions: [session("selected"), { ...session("background"), updatedAt: 1_700_000_001_000 }] },
+    });
+
+    expect(useDashboard.getState().unreadCounts.background).toBe(1);
+    useDashboard.getState().select("background");
+    expect(useDashboard.getState().unreadCounts.background).toBe(0);
   });
 
   it("adds and selects a newly created session", () => {

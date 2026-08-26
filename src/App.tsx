@@ -38,7 +38,7 @@ function relativeTime(timestamp: number) {
 }
 
 function Sidebar({ collapsed, onToggle, onNewSession, onSessionAction, onArchiveViewChange }: { collapsed: boolean; onToggle: () => void; onNewSession: () => void; onSessionAction: (action: "rename" | "archive" | "restore", session: Session) => void; onArchiveViewChange: (archived: boolean) => void }) {
-  const { sessions, archivedSessions, showingArchived, approvals, selectedId, select, account, connected, setSettingsOpen } = useDashboard();
+  const { sessions, archivedSessions, showingArchived, approvals, unreadCounts, selectedId, select, account, connected, setSettingsOpen } = useDashboard();
   const [filters, setFilters] = useState(loadSessionFilters);
   const [menuId, setMenuId] = useState<string>();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -64,6 +64,7 @@ function Sidebar({ collapsed, onToggle, onNewSession, onSessionAction, onArchive
   const filtered = useMemo(() => filterSessions(displayedSessions, approvals ?? [], filters), [displayedSessions, approvals, filters]);
   const hasFilters = Boolean(filters.query || filters.status !== "all" || filters.approvalsOnly || filters.sort !== "updated-desc");
   const usage = Math.min(100, Math.max(0, account.usedPercent ?? 0));
+  const unreadTotal = displayedSessions.reduce((total, session) => total + (unreadCounts[session.id] ?? 0), 0);
   return <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
     <div className="brand-row"><div className="brand"><span className="brand-mark"><Sparkles size={15} /></span><span>Codex</span></div><button className="icon-button sidebar-toggle" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} onClick={onToggle}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button></div>
     <button className="new-session" onClick={onNewSession} aria-label="New session"><MessageSquarePlus size={16} /><span>New session</span><kbd>⌘ N</kbd></button>
@@ -75,13 +76,14 @@ function Sidebar({ collapsed, onToggle, onNewSession, onSessionAction, onArchive
       {hasFilters && <button className="clear-filters" aria-label="Clear session filters" onClick={() => setFilters(defaultSessionFilters)}><RotateCcw size={12} /></button>}
     </div>
     <div className="session-view-tabs"><button className={!showingArchived ? "active" : ""} onClick={() => onArchiveViewChange(false)}>Active</button><button className={showingArchived ? "active" : ""} onClick={() => onArchiveViewChange(true)}>Archived</button></div>
-    <div className="section-title"><span>{showingArchived ? "Archived" : "Sessions"}</span><span>{filtered.length}/{displayedSessions.length}</span></div>
+    <div className="section-title"><span>{showingArchived ? "Archived" : "Sessions"}</span><span>{unreadTotal ? `${unreadTotal} unread · ` : ""}{filtered.length}/{displayedSessions.length}</span></div>
     <nav className="session-list">
-      {filtered.map((session) => <div key={session.id} className={`session-item ${selectedId === session.id ? "selected" : ""}`}>
+      {filtered.map((session) => { const unread = unreadCounts[session.id] ?? 0; const needsApproval = (approvals ?? []).some((approval) => approval.threadId === session.id); return <div key={session.id} className={`session-item ${selectedId === session.id ? "selected" : ""} ${unread ? "has-unread" : ""} ${needsApproval ? "needs-approval" : ""}`}>
         <button className="session-select" title={collapsed ? `${session.title} — ${statusLabel[session.status]}` : undefined} aria-label={collapsed ? session.title : undefined} onClick={() => { select(session.id); setMenuId(undefined); }}><span className={`status-dot ${session.status}`} /><span className="session-copy"><strong>{session.title}</strong><span>{statusLabel[session.status]} · {relativeTime(session.updatedAt)}</span></span></button>
+        {(needsApproval || unread > 0) && <span className={`session-unread ${needsApproval ? "approval" : ""}`} aria-label={needsApproval ? "Approval required" : `${unread} unread updates`}>{needsApproval ? "!" : unread > 9 ? "9+" : unread}</span>}
         <button className="session-more" aria-label={`Session actions for ${session.title}`} onClick={(event) => { event.stopPropagation(); setMenuId((current) => current === session.id ? undefined : session.id); }}><MoreHorizontal size={16} /></button>
         {menuId === session.id && <div className="session-menu" onClick={(event) => event.stopPropagation()}>{showingArchived ? <button onClick={() => { setMenuId(undefined); onSessionAction("restore", session); }}><RotateCcw size={13} /> Restore</button> : <><button onClick={() => { setMenuId(undefined); onSessionAction("rename", session); }}><Pencil size={13} /> Rename</button><button className="archive" onClick={() => { setMenuId(undefined); onSessionAction("archive", session); }}><Archive size={13} /> Archive</button></>}</div>}
-      </div>)}
+      </div>})}
       {!filtered.length && <div className="empty-list">No sessions found</div>}
     </nav>
     <div className="account-card">
