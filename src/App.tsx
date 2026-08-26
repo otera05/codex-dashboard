@@ -8,6 +8,7 @@ import { ApprovalCard } from "./components/ApprovalCard";
 import { NewSessionDialog } from "./components/NewSessionDialog";
 import { SessionActionDialog } from "./components/SessionActionDialog";
 import { SessionActivityPanel } from "./components/SessionActivityPanel";
+import { SessionHeaderMenu } from "./components/SessionHeaderMenu";
 import { useSessionSync } from "./hooks/useSessionSync";
 import { useSessionListSync } from "./hooks/useSessionListSync";
 import { useDesktopNotifications } from "./hooks/useDesktopNotifications";
@@ -99,7 +100,7 @@ function relativeReset(timestamp: number) {
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
-function Workspace({ session, approvals, archived, loading, error }: { session?: Session; approvals: ApprovalRequest[]; archived: boolean; loading: boolean; error?: string }) {
+function Workspace({ session, approvals, archived, loading, error, onSessionAction }: { session?: Session; approvals: ApprovalRequest[]; archived: boolean; loading: boolean; error?: string; onSessionAction: (action: "rename" | "archive" | "restore", session: Session) => void }) {
   const [draft, setDraft] = useState("");
   const [activityOpen, setActivityOpen] = useState(false);
   const conversationRef = useRef<HTMLElement>(null);
@@ -125,7 +126,7 @@ function Workspace({ session, approvals, archived, loading, error }: { session?:
   return <main className="workspace">
     <header className="workspace-header">
       <div><div className="title-line"><h1>{session.title}</h1><span className={`status-pill ${session.status}`}><i />{statusLabel[session.status]}</span></div><p><Folder size={13} /> {session.cwd}</p></div>
-      <div className="header-actions"><button className="subtle-button" onClick={() => setActivityOpen(true)}><Activity size={15} /> Activity</button><button className="icon-button"><MoreHorizontal size={18} /></button></div>
+      <div className="header-actions"><button className="subtle-button" onClick={() => setActivityOpen(true)}><Activity size={15} /> Activity</button><SessionHeaderMenu session={session} archived={archived} onAction={onSessionAction} /></div>
     </header>
     <section className="conversation" ref={conversationRef} onScroll={(event) => {
       const element = event.currentTarget;
@@ -277,5 +278,5 @@ export function App() {
   }, []);
   const sessionApprovals = (approvals ?? []).filter((approval) => approval.threadId === selectedId);
   const toggleSidebar = () => setSidebarPreference((current) => { const next = !current; localStorage.setItem(sidebarCollapsedKey, String(next)); return next; });
-  return <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}><Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} onNewSession={() => setNewSessionOpen(true)} onSessionAction={(action, target) => setSessionAction({ action, session: target })} onArchiveViewChange={(archived) => { if (archived) void listArchivedSessions().then((items) => { setArchivedSessions(items); setShowingArchived(true); }); else setShowingArchived(false); }} />{settingsOpen ? <SettingsView notificationsEnabled={notifications.enabled} notificationError={notifications.permissionError} onNotificationsChange={notifications.setEnabled} onDisconnectAccount={() => setDisconnectAccountOpen(true)} /> : <Workspace session={session} approvals={sessionApprovals} archived={showingArchived} loading={loadingSessionId === selectedId} error={sessionError} />}{newSessionOpen && <NewSessionDialog defaultCwd={session?.cwd ?? ""} defaultModel={session?.model} onClose={() => setNewSessionOpen(false)} onCreated={(created) => { addSession(created); setNewSessionOpen(false); }} />}{sessionAction && <SessionActionDialog action={sessionAction.action} session={sessionAction.session} onClose={() => setSessionAction(undefined)} onRenamed={(renamed) => { mergeSession(renamed); setSessionAction(undefined); }} onArchived={(id) => { archiveSession(id); setSessionAction(undefined); }} onRestored={(restored) => { restoreSession(restored); setSessionAction(undefined); }} />}{disconnectAccountOpen && <DisconnectAccountDialog onClose={() => setDisconnectAccountOpen(false)} onDisconnected={() => setDisconnectAccountOpen(false)} />}</div>;
+  return <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}><Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} onNewSession={() => setNewSessionOpen(true)} onSessionAction={(action, target) => setSessionAction({ action, session: target })} onArchiveViewChange={(archived) => { if (archived) void listArchivedSessions().then((items) => { setArchivedSessions(items); setShowingArchived(true); }); else setShowingArchived(false); }} />{settingsOpen ? <SettingsView notificationsEnabled={notifications.enabled} notificationError={notifications.permissionError} onNotificationsChange={notifications.setEnabled} onDisconnectAccount={() => setDisconnectAccountOpen(true)} /> : <Workspace session={session} approvals={sessionApprovals} archived={showingArchived} loading={loadingSessionId === selectedId} error={sessionError} onSessionAction={(action, target) => setSessionAction({ action, session: target })} />}{newSessionOpen && <NewSessionDialog defaultCwd={session?.cwd ?? ""} defaultModel={session?.model} onClose={() => setNewSessionOpen(false)} onCreated={(created) => { addSession(created); setNewSessionOpen(false); }} />}{sessionAction && <SessionActionDialog action={sessionAction.action} session={sessionAction.session} onClose={() => setSessionAction(undefined)} onRenamed={(renamed) => { mergeSession(renamed); setSessionAction(undefined); }} onArchived={(id) => { archiveSession(id); setSessionAction(undefined); }} onRestored={(restored) => { restoreSession(restored); setSessionAction(undefined); }} />}{disconnectAccountOpen && <DisconnectAccountDialog onClose={() => setDisconnectAccountOpen(false)} onDisconnected={() => setDisconnectAccountOpen(false)} />}</div>;
 }
