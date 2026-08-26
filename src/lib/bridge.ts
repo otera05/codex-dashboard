@@ -96,6 +96,25 @@ export async function createThread(cwd: string, model: string | undefined, promp
   return invoke<Session>("create_thread", { cwd, model, prompt });
 }
 
+export async function pickDirectory(defaultPath?: string): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({ directory: true, multiple: false, defaultPath: defaultPath || undefined, title: "Choose a working directory" });
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function validateDirectory(path: string): Promise<boolean> {
+  if (!isTauri()) return Boolean(path.trim());
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<boolean>("validate_directory", { path });
+}
+
+export async function openDirectory(path: string): Promise<void> {
+  if (!isTauri()) return;
+  const { openPath } = await import("@tauri-apps/plugin-opener");
+  await openPath(path);
+}
+
 export async function renameThread(threadId: string, name: string): Promise<Session> {
   if (!isTauri()) {
     const session = demoSnapshot.sessions.find((item) => item.id === threadId);

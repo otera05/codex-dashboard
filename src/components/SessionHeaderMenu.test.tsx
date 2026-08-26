@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionHeaderMenu } from "./SessionHeaderMenu";
 import type { Session } from "../types";
 
+const bridge = vi.hoisted(() => ({ openDirectory: vi.fn() }));
+vi.mock("../lib/bridge", () => bridge);
+
 const session: Session = { id: "thread-1", title: "Dashboard", cwd: "/workspace/dashboard", status: "idle", updatedAt: 1, model: "gpt-5", messages: [], tokenUsage: { input: 0, output: 0, cached: 0 } };
 
 describe("SessionHeaderMenu", () => {
@@ -23,5 +26,8 @@ describe("SessionHeaderMenu", () => {
     fireEvent.click(screen.getByRole("button", { name: "Session options" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy directory" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("/workspace/dashboard"));
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open directory" }));
+    expect(bridge.openDirectory).toHaveBeenCalledWith("/workspace/dashboard");
   });
 });

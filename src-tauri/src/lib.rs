@@ -71,6 +71,11 @@ async fn create_thread(
 }
 
 #[tauri::command]
+fn validate_directory(path: String) -> bool {
+    std::path::Path::new(&path).is_dir()
+}
+
+#[tauri::command]
 async fn rename_thread(
     server: State<'_, Arc<AppServer>>,
     thread_id: String,
@@ -197,6 +202,8 @@ pub fn run() {
     let server = AppServer::new();
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(Arc::clone(&server))
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -217,6 +224,7 @@ pub fn run() {
             logout_account,
             list_models,
             create_thread,
+            validate_directory,
             rename_thread,
             archive_thread,
             list_archived_sessions,

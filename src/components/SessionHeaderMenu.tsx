@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Archive, Check, Clipboard, Folder, MoreHorizontal, Pencil, RotateCcw } from "lucide-react";
+import { Archive, Check, Clipboard, ExternalLink, Folder, MoreHorizontal, Pencil, RotateCcw } from "lucide-react";
 import type { Session } from "../types";
+import { openDirectory } from "../lib/bridge";
 
 export function SessionHeaderMenu({ session, archived, onAction }: { session: Session; archived: boolean; onAction: (action: "rename" | "archive" | "restore", session: Session) => void }) {
   const [open, setOpen] = useState(false);
@@ -38,6 +39,7 @@ export function SessionHeaderMenu({ session, archived, onAction }: { session: Se
       <span />
       <button role="menuitem" onClick={() => void copy("id", session.id)}>{copied === "id" ? <Check size={14} /> : <Clipboard size={14} />} {copied === "id" ? "Copied session ID" : "Copy session ID"}</button>
       <button role="menuitem" onClick={() => void copy("cwd", session.cwd)}>{copied === "cwd" ? <Check size={14} /> : <Folder size={14} />} {copied === "cwd" ? "Copied directory" : "Copy directory"}</button>
+      <button role="menuitem" onClick={() => { setOpen(false); void openDirectory(session.cwd); }}><ExternalLink size={14} /> Open directory</button>
     </div>}
   </div>;
 }
