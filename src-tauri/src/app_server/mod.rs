@@ -1,5 +1,7 @@
+mod rpc;
+
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     env,
     path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
@@ -11,51 +13,19 @@ use std::{
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
-use thiserror::Error;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, BufReader},
     process::{Child, ChildStdin, Command},
-    sync::{oneshot, Mutex, RwLock},
+    sync::{Mutex, RwLock},
 };
+
+pub use rpc::AppServerError;
+use rpc::Pending;
 
 use crate::models::{
     apply_turn_history, merge_turn_history, parse_account, parse_sessions, Account,
     ApprovalRequest, CodexModel, DashboardSnapshot, RpcEnvelope, Session,
 };
-
-#[derive(Debug, Error)]
-pub enum AppServerError {
-    #[error("Codex App Server could not be started: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Codex App Server returned an error: {0}")]
-    Rpc(String),
-    #[error("Codex App Server disconnected{0}")]
-    Disconnected(String),
-}
-
-impl AppServerError {
-    fn disconnected() -> Self {
-        Self::Disconnected(String::new())
-    }
-
-    fn disconnected_with_details(details: &str) -> Self {
-        let details = details.trim();
-        if details.is_empty() {
-            Self::disconnected()
-        } else {
-            Self::Disconnected(format!(": {details}"))
-        }
-    }
-}
-
-impl serde::Serialize for AppServerError {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
-}
 
 fn is_unmaterialized_thread_error(error: &AppServerError) -> bool {
     matches!(error, AppServerError::Rpc(message) if message.contains("is not materialized yet") && message.contains("thread/turns/list"))
@@ -64,8 +34,6 @@ fn is_unmaterialized_thread_error(error: &AppServerError) -> bool {
 fn requires_thread_resume(pending_threads: &HashSet<String>, thread_id: &str) -> bool {
     !pending_threads.contains(thread_id)
 }
-
-type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, AppServerError>>>>>;
 
 pub struct AppServer {
     child: Mutex<Option<Child>>,
@@ -83,7 +51,7 @@ impl AppServer {
         Arc::new(Self {
             child: Mutex::new(None),
             stdin: Mutex::new(None),
-            pending: Arc::new(Mutex::new(HashMap::new())),
+            pending: Pending::default(),
             next_id: AtomicU64::new(1),
             connection_generation: AtomicU64::new(0),
             diagnostics: Mutex::new(VecDeque::new()),
@@ -199,25 +167,6 @@ impl AppServer {
         );
     }
 
-    async fn reject_pending_as_disconnected(&self) {
-        let mut pending = self.pending.lock().await;
-        for (_, sender) in pending.drain() {
-            let _ = sender.send(Err(AppServerError::disconnected()));
-        }
-    }
-
-    async fn reject_pending_with_diagnostics(&self) {
-        let details = self.diagnostic_details().await;
-        let mut pending = self.pending.lock().await;
-        for (_, sender) in pending.drain() {
-            let _ = sender.send(Err(AppServerError::disconnected_with_details(&details)));
-        }
-    }
-
-    async fn disconnected_error(&self) -> AppServerError {
-        AppServerError::disconnected_with_details(&self.diagnostic_details().await)
-    }
-
     async fn clear_diagnostics(&self) {
         self.diagnostics.lock().await.clear();
     }
@@ -243,48 +192,6 @@ impl AppServer {
             .cloned()
             .collect::<Vec<_>>()
             .join("; ")
-    }
-
-    pub async fn request(&self, method: &str, params: Value) -> Result<Value, AppServerError> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let (sender, receiver) = oneshot::channel();
-        self.pending.lock().await.insert(id, sender);
-        let message = serde_json::to_string(
-            &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
-        )
-        .expect("JSON serialization cannot fail")
-            + "\n";
-        let result = if let Some(stdin) = self.stdin.lock().await.as_mut() {
-            stdin.write_all(message.as_bytes()).await
-        } else {
-            return Err(self.disconnected_error().await);
-        };
-        if let Err(error) = result {
-            self.pending.lock().await.remove(&id);
-            if error.kind() == std::io::ErrorKind::BrokenPipe {
-                return Err(self.disconnected_error().await);
-            }
-            return Err(error.into());
-        }
-        match receiver.await {
-            Ok(result) => result,
-            Err(_) => Err(self.disconnected_error().await),
-        }
-    }
-
-    pub async fn request_with_reconnect(
-        self: &Arc<Self>,
-        app: &AppHandle,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, AppServerError> {
-        match self.request(method, params.clone()).await {
-            Err(AppServerError::Disconnected(_)) => {
-                self.connect(app.clone()).await?;
-                self.request(method, params).await
-            }
-            result => result,
-        }
     }
 
     async fn handle_server_request(
@@ -413,27 +320,6 @@ impl AppServer {
             "dashboard-event",
             json!({ "type": "approval.resolved", "requestId": request_id }),
         );
-        Ok(())
-    }
-
-    async fn write_response(
-        &self,
-        id: Value,
-        response: Result<Value, Value>,
-    ) -> Result<(), AppServerError> {
-        let envelope = match response {
-            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-            Err(error) => json!({ "jsonrpc": "2.0", "id": id, "error": error }),
-        };
-        let message =
-            serde_json::to_string(&envelope).expect("JSON serialization cannot fail") + "\n";
-        self.stdin
-            .lock()
-            .await
-            .as_mut()
-            .ok_or_else(AppServerError::disconnected)?
-            .write_all(message.as_bytes())
-            .await?;
         Ok(())
     }
 
@@ -829,21 +715,6 @@ impl AppServer {
             json!({ "type": "account.updated", "account": account }),
         );
         Ok(account)
-    }
-
-    async fn write_notification(&self, method: &str, params: Value) -> Result<(), AppServerError> {
-        let message =
-            serde_json::to_string(&json!({ "jsonrpc": "2.0", "method": method, "params": params }))
-                .expect("JSON serialization cannot fail")
-                + "\n";
-        self.stdin
-            .lock()
-            .await
-            .as_mut()
-            .ok_or_else(AppServerError::disconnected)?
-            .write_all(message.as_bytes())
-            .await?;
-        Ok(())
     }
 
     async fn refresh(&self, app: &AppHandle) -> Result<(), AppServerError> {
