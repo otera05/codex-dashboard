@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Archive, ArrowUp, Bell, BellOff, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Pencil, Search, Settings, Sparkles, Unplug, UserRound, X } from "lucide-react";
+import { Activity, Archive, ArrowUp, Bell, BellOff, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Pencil, RotateCcw, Search, Settings, Sparkles, Unplug, UserRound, X } from "lucide-react";
 import { getSession, getSnapshot, interruptTurn, logoutAccount, refreshAccount, sendTurn, startLogin, subscribe } from "./lib/bridge";
 import { MessageContent } from "./components/MessageContent";
 import { CommandActivity } from "./components/CommandActivity";
@@ -11,9 +11,21 @@ import { useSessionSync } from "./hooks/useSessionSync";
 import { useSessionListSync } from "./hooks/useSessionListSync";
 import { useDesktopNotifications } from "./hooks/useDesktopNotifications";
 import { useDashboard } from "./store";
+import { filterSessions, type SessionFilters } from "./lib/sessionFilters";
 import type { ApprovalRequest, DashboardSnapshot, Session, SessionStatus } from "./types";
 
 const statusLabel: Record<SessionStatus, string> = { working: "Working", waiting: "Waiting", idle: "Idle", error: "Error" };
+const sessionFiltersKey = "codex-dashboard.session-filters";
+const defaultSessionFilters: SessionFilters = { query: "", status: "all", approvalsOnly: false, sort: "updated-desc" };
+
+function loadSessionFilters(): SessionFilters {
+  try {
+    const saved = JSON.parse(localStorage.getItem(sessionFiltersKey) ?? "null") as Partial<SessionFilters> | null;
+    return saved ? { ...defaultSessionFilters, ...saved, query: "" } : defaultSessionFilters;
+  } catch {
+    return defaultSessionFilters;
+  }
+}
 
 function relativeTime(timestamp: number) {
   const seconds = Math.max(1, Math.floor((Date.now() - timestamp) / 1000));
@@ -23,22 +35,43 @@ function relativeTime(timestamp: number) {
 }
 
 function Sidebar({ onNewSession, onSessionAction }: { onNewSession: () => void; onSessionAction: (action: "rename" | "archive", session: Session) => void }) {
-  const { sessions, selectedId, select, account, connected, setSettingsOpen } = useDashboard();
-  const [query, setQuery] = useState("");
+  const { sessions, approvals, selectedId, select, account, connected, setSettingsOpen } = useDashboard();
+  const [filters, setFilters] = useState(loadSessionFilters);
   const [menuId, setMenuId] = useState<string>();
+  const searchRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const closeMenu = () => setMenuId(undefined);
     window.addEventListener("click", closeMenu);
     return () => window.removeEventListener("click", closeMenu);
   }, []);
-  const filtered = sessions.filter((session) => session.title.toLowerCase().includes(query.toLowerCase()));
+  useEffect(() => {
+    localStorage.setItem(sessionFiltersKey, JSON.stringify({ ...filters, query: "" }));
+  }, [filters]);
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, []);
+  const filtered = useMemo(() => filterSessions(sessions, approvals ?? [], filters), [sessions, approvals, filters]);
+  const hasFilters = Boolean(filters.query || filters.status !== "all" || filters.approvalsOnly || filters.sort !== "updated-desc");
   const usage = Math.min(100, Math.max(0, account.usedPercent ?? 0));
   return <aside className="sidebar">
     <div className="window-drag"><span /><span /><span /></div>
     <div className="brand-row"><div className="brand"><span className="brand-mark"><Sparkles size={15} /></span><span>Codex</span></div><button className="icon-button" aria-label="Collapse sidebar"><PanelLeftClose size={17} /></button></div>
     <button className="new-session" onClick={onNewSession}><MessageSquarePlus size={16} /> New session <kbd>⌘ N</kbd></button>
-    <label className="search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search sessions" /></label>
-    <div className="section-title"><span>Sessions</span><span>{filtered.length}</span></div>
+    <label className="search"><Search size={14} /><input ref={searchRef} value={filters.query} onChange={(event) => setFilters((current) => ({ ...current, query: event.target.value }))} placeholder="Search sessions" aria-label="Search sessions" /><kbd>⌘K</kbd></label>
+    <div className="session-filters">
+      <select aria-label="Filter by status" value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value as SessionFilters["status"] }))}><option value="all">All status</option><option value="working">Working</option><option value="waiting">Waiting</option><option value="idle">Idle</option><option value="error">Error</option></select>
+      <button className={filters.approvalsOnly ? "active" : ""} aria-pressed={filters.approvalsOnly} onClick={() => setFilters((current) => ({ ...current, approvalsOnly: !current.approvalsOnly }))}><Bell size={11} /> Approval</button>
+      <select aria-label="Sort sessions" value={filters.sort} onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as SessionFilters["sort"] }))}><option value="updated-desc">Newest</option><option value="updated-asc">Oldest</option><option value="title">Name</option></select>
+      {hasFilters && <button className="clear-filters" aria-label="Clear session filters" onClick={() => setFilters(defaultSessionFilters)}><RotateCcw size={12} /></button>}
+    </div>
+    <div className="section-title"><span>Sessions</span><span>{filtered.length}/{sessions.length}</span></div>
     <nav className="session-list">
       {filtered.map((session) => <div key={session.id} className={`session-item ${selectedId === session.id ? "selected" : ""}`}>
         <button className="session-select" onClick={() => { select(session.id); setMenuId(undefined); }}><span className={`status-dot ${session.status}`} /><span className="session-copy"><strong>{session.title}</strong><span>{statusLabel[session.status]} · {relativeTime(session.updatedAt)}</span></span></button>
