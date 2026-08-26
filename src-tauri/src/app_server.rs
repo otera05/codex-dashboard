@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     env,
     path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
@@ -70,6 +70,7 @@ pub struct AppServer {
     next_id: AtomicU64,
     connection_generation: AtomicU64,
     diagnostics: Mutex<VecDeque<String>>,
+    pending_threads: Mutex<HashSet<String>>,
     pub snapshot: RwLock<DashboardSnapshot>,
 }
 
@@ -82,6 +83,7 @@ impl AppServer {
             next_id: AtomicU64::new(1),
             connection_generation: AtomicU64::new(0),
             diagnostics: Mutex::new(VecDeque::new()),
+            pending_threads: Mutex::new(HashSet::new()),
             snapshot: RwLock::new(DashboardSnapshot::default()),
         })
     }
@@ -572,6 +574,7 @@ impl AppServer {
             session.status = "working".to_owned();
         } else {
             session.history_loaded = true;
+            self.pending_threads.lock().await.insert(thread_id.clone());
         }
         let mut snapshot = self.snapshot.write().await;
         snapshot.sessions.retain(|item| item.id != thread_id);
@@ -602,6 +605,7 @@ impl AppServer {
     pub async fn archive_thread(&self, thread_id: &str) -> Result<(), AppServerError> {
         self.request("thread/archive", json!({ "threadId": thread_id }))
             .await?;
+        self.pending_threads.lock().await.remove(thread_id);
         let mut snapshot = self.snapshot.write().await;
         if let Some(index) = snapshot
             .sessions
@@ -760,9 +764,11 @@ impl AppServer {
         }
 
         let mut sessions = parse_sessions(&json!({ "data": threads }));
-        sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         let mut snapshot = self.snapshot.write().await;
         Self::preserve_loaded_history(&snapshot.sessions, &mut sessions);
+        let mut pending_threads = self.pending_threads.lock().await;
+        Self::preserve_pending_sessions(&snapshot.sessions, &mut sessions, &mut pending_threads);
+        sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         snapshot.sessions = sessions;
         snapshot.connected = true;
         Ok(snapshot.clone())
@@ -857,6 +863,26 @@ impl AppServer {
                 session.history_loaded = true;
             }
         }
+    }
+
+    fn preserve_pending_sessions(
+        previous_sessions: &[Session],
+        sessions: &mut Vec<Session>,
+        pending_threads: &mut HashSet<String>,
+    ) {
+        let materialized_ids = sessions
+            .iter()
+            .map(|session| session.id.clone())
+            .collect::<HashSet<_>>();
+        sessions.extend(
+            previous_sessions
+                .iter()
+                .filter(|session| {
+                    pending_threads.contains(&session.id) && !materialized_ids.contains(&session.id)
+                })
+                .cloned(),
+        );
+        pending_threads.retain(|thread_id| !materialized_ids.contains(thread_id));
     }
 
     fn notification_requires_refresh(method: &str) -> bool {
@@ -967,6 +993,39 @@ mod tests {
         assert!(!is_unmaterialized_thread_error(&AppServerError::Rpc(
             r#"{"code":-32600,"message":"another request failed"}"#.to_owned(),
         )));
+    }
+
+    #[test]
+    fn preserves_pending_threads_until_they_are_materialized() {
+        let pending = Session {
+            id: "pending".to_owned(),
+            title: "New session".to_owned(),
+            cwd: "/workspace".to_owned(),
+            status: "idle".to_owned(),
+            updated_at: 2,
+            model: "Codex".to_owned(),
+            active_turn_id: None,
+            messages: Vec::new(),
+            token_usage: Default::default(),
+            history_loaded: true,
+        };
+        let mut pending_threads = HashSet::from([pending.id.clone()]);
+        let mut sessions = Vec::new();
+
+        AppServer::preserve_pending_sessions(
+            std::slice::from_ref(&pending),
+            &mut sessions,
+            &mut pending_threads,
+        );
+        assert_eq!(sessions[0].id, "pending");
+        assert!(pending_threads.contains("pending"));
+
+        AppServer::preserve_pending_sessions(
+            std::slice::from_ref(&pending),
+            &mut sessions,
+            &mut pending_threads,
+        );
+        assert!(!pending_threads.contains("pending"));
     }
 }
 
