@@ -1,3 +1,4 @@
+mod account;
 mod process;
 mod rpc;
 
@@ -17,8 +18,8 @@ pub use rpc::AppServerError;
 use rpc::Pending;
 
 use crate::models::{
-    apply_turn_history, merge_turn_history, parse_account, parse_sessions, Account,
-    ApprovalRequest, CodexModel, DashboardSnapshot, Session,
+    apply_turn_history, merge_turn_history, parse_account, parse_sessions, ApprovalRequest,
+    CodexModel, DashboardSnapshot, Session,
 };
 
 fn is_unmaterialized_thread_error(error: &AppServerError) -> bool {
@@ -541,42 +542,6 @@ impl AppServer {
         Ok(snapshot.clone())
     }
 
-    pub async fn refresh_account(
-        self: &Arc<Self>,
-        app: &AppHandle,
-    ) -> Result<Account, AppServerError> {
-        let account_result = self
-            .request_with_reconnect(app, "account/read", json!({ "refreshToken": true }))
-            .await
-            .unwrap_or(Value::Null);
-        let rates = self
-            .request_with_reconnect(app, "account/rateLimits/read", json!({}))
-            .await
-            .unwrap_or(Value::Null);
-        let account = parse_account(&account_result, &rates);
-        self.snapshot.write().await.account = account.clone();
-        let _ = app.emit(
-            "dashboard-event",
-            json!({ "type": "account.updated", "account": account }),
-        );
-        Ok(account)
-    }
-
-    pub async fn logout_account(
-        self: &Arc<Self>,
-        app: &AppHandle,
-    ) -> Result<Account, AppServerError> {
-        self.request_with_reconnect(app, "account/logout", Value::Null)
-            .await?;
-        let account = Account::default();
-        self.snapshot.write().await.account = account.clone();
-        let _ = app.emit(
-            "dashboard-event",
-            json!({ "type": "account.updated", "account": account }),
-        );
-        Ok(account)
-    }
-
     async fn refresh(&self, app: &AppHandle) -> Result<(), AppServerError> {
         self.reload_sessions().await?;
         let account_result = self.read_account(false).await;
@@ -589,18 +554,6 @@ impl AppServer {
             json!({ "type": "snapshot", "snapshot": &*snapshot }),
         );
         Ok(())
-    }
-
-    async fn read_account(&self, refresh_token: bool) -> Value {
-        self.request("account/read", json!({ "refreshToken": refresh_token }))
-            .await
-            .unwrap_or(Value::Null)
-    }
-
-    async fn read_rate_limits(&self) -> Value {
-        self.request("account/rateLimits/read", json!({}))
-            .await
-            .unwrap_or(Value::Null)
     }
 
     fn preserve_loaded_history(previous_sessions: &[Session], sessions: &mut [Session]) {
