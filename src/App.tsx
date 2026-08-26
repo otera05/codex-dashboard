@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Archive, ArrowUp, Bell, BellOff, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, Pencil, RotateCcw, Search, Settings, Sparkles, Unplug, UserRound, X } from "lucide-react";
+import { Activity, Archive, ArrowUp, Bell, BellOff, Bot, CircleStop, Clock3, Folder, Gauge, LoaderCircle, LogIn, MessageSquarePlus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Search, Settings, Sparkles, Unplug, UserRound, X } from "lucide-react";
 import { getSession, getSnapshot, interruptTurn, listArchivedSessions, logoutAccount, refreshAccount, sendTurn, startLogin, subscribe } from "./lib/bridge";
 import { MessageContent } from "./components/MessageContent";
 import { CommandActivity } from "./components/CommandActivity";
@@ -16,6 +16,7 @@ import type { ApprovalRequest, DashboardSnapshot, Session, SessionStatus } from 
 
 const statusLabel: Record<SessionStatus, string> = { working: "Working", waiting: "Waiting", idle: "Idle", error: "Error" };
 const sessionFiltersKey = "codex-dashboard.session-filters";
+const sidebarCollapsedKey = "codex-dashboard.sidebar-collapsed";
 const defaultSessionFilters: SessionFilters = { query: "", status: "all", approvalsOnly: false, sort: "updated-desc" };
 
 function loadSessionFilters(): SessionFilters {
@@ -34,7 +35,7 @@ function relativeTime(timestamp: number) {
   return `${Math.floor(seconds / 3600)}h`;
 }
 
-function Sidebar({ onNewSession, onSessionAction, onArchiveViewChange }: { onNewSession: () => void; onSessionAction: (action: "rename" | "archive" | "restore", session: Session) => void; onArchiveViewChange: (archived: boolean) => void }) {
+function Sidebar({ collapsed, onToggle, onNewSession, onSessionAction, onArchiveViewChange }: { collapsed: boolean; onToggle: () => void; onNewSession: () => void; onSessionAction: (action: "rename" | "archive" | "restore", session: Session) => void; onArchiveViewChange: (archived: boolean) => void }) {
   const { sessions, archivedSessions, showingArchived, approvals, selectedId, select, account, connected, setSettingsOpen } = useDashboard();
   const [filters, setFilters] = useState(loadSessionFilters);
   const [menuId, setMenuId] = useState<string>();
@@ -61,10 +62,9 @@ function Sidebar({ onNewSession, onSessionAction, onArchiveViewChange }: { onNew
   const filtered = useMemo(() => filterSessions(displayedSessions, approvals ?? [], filters), [displayedSessions, approvals, filters]);
   const hasFilters = Boolean(filters.query || filters.status !== "all" || filters.approvalsOnly || filters.sort !== "updated-desc");
   const usage = Math.min(100, Math.max(0, account.usedPercent ?? 0));
-  return <aside className="sidebar">
-    <div className="window-drag"><span /><span /><span /></div>
-    <div className="brand-row"><div className="brand"><span className="brand-mark"><Sparkles size={15} /></span><span>Codex</span></div><button className="icon-button" aria-label="Collapse sidebar"><PanelLeftClose size={17} /></button></div>
-    <button className="new-session" onClick={onNewSession}><MessageSquarePlus size={16} /> New session <kbd>⌘ N</kbd></button>
+  return <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
+    <div className="brand-row"><div className="brand"><span className="brand-mark"><Sparkles size={15} /></span><span>Codex</span></div><button className="icon-button sidebar-toggle" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} onClick={onToggle}>{collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button></div>
+    <button className="new-session" onClick={onNewSession} aria-label="New session"><MessageSquarePlus size={16} /><span>New session</span><kbd>⌘ N</kbd></button>
     <label className="search"><Search size={14} /><input ref={searchRef} value={filters.query} onChange={(event) => setFilters((current) => ({ ...current, query: event.target.value }))} placeholder="Search sessions" aria-label="Search sessions" /><kbd>⌘K</kbd></label>
     <div className="session-filters">
       <select aria-label="Filter by status" value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value as SessionFilters["status"] }))}><option value="all">All status</option><option value="working">Working</option><option value="waiting">Waiting</option><option value="idle">Idle</option><option value="error">Error</option></select>
@@ -76,7 +76,7 @@ function Sidebar({ onNewSession, onSessionAction, onArchiveViewChange }: { onNew
     <div className="section-title"><span>{showingArchived ? "Archived" : "Sessions"}</span><span>{filtered.length}/{displayedSessions.length}</span></div>
     <nav className="session-list">
       {filtered.map((session) => <div key={session.id} className={`session-item ${selectedId === session.id ? "selected" : ""}`}>
-        <button className="session-select" onClick={() => { select(session.id); setMenuId(undefined); }}><span className={`status-dot ${session.status}`} /><span className="session-copy"><strong>{session.title}</strong><span>{statusLabel[session.status]} · {relativeTime(session.updatedAt)}</span></span></button>
+        <button className="session-select" title={collapsed ? `${session.title} — ${statusLabel[session.status]}` : undefined} aria-label={collapsed ? session.title : undefined} onClick={() => { select(session.id); setMenuId(undefined); }}><span className={`status-dot ${session.status}`} /><span className="session-copy"><strong>{session.title}</strong><span>{statusLabel[session.status]} · {relativeTime(session.updatedAt)}</span></span></button>
         <button className="session-more" aria-label={`Session actions for ${session.title}`} onClick={(event) => { event.stopPropagation(); setMenuId((current) => current === session.id ? undefined : session.id); }}><MoreHorizontal size={16} /></button>
         {menuId === session.id && <div className="session-menu" onClick={(event) => event.stopPropagation()}>{showingArchived ? <button onClick={() => { setMenuId(undefined); onSessionAction("restore", session); }}><RotateCcw size={13} /> Restore</button> : <><button onClick={() => { setMenuId(undefined); onSessionAction("rename", session); }}><Pencil size={13} /> Rename</button><button className="archive" onClick={() => { setMenuId(undefined); onSessionAction("archive", session); }}><Archive size={13} /> Archive</button></>}</div>}
       </div>)}
@@ -227,6 +227,9 @@ export function App() {
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [sessionAction, setSessionAction] = useState<{ action: "rename" | "archive" | "restore"; session: Session }>();
   const [disconnectAccountOpen, setDisconnectAccountOpen] = useState(false);
+  const [sidebarPreference, setSidebarPreference] = useState(() => localStorage.getItem(sidebarCollapsedKey) === "true");
+  const [narrowWindow, setNarrowWindow] = useState(() => window.innerWidth < 960);
+  const sidebarCollapsed = sidebarPreference || narrowWindow;
   const notifications = useDesktopNotifications(sessions, approvals ?? []);
   const applySnapshot = useCallback((snapshot: DashboardSnapshot) => applyEvent({ type: "snapshot", snapshot }), [applyEvent]);
   useEffect(() => { let unsubscribe: () => void = () => undefined; void getSnapshot().then((snapshot) => hydrate(snapshot.sessions, snapshot.approvals ?? [], snapshot.account, snapshot.connected)); void subscribe(applyEvent).then((fn) => { unsubscribe = fn; }); return () => unsubscribe(); }, [hydrate, applyEvent]);
@@ -250,6 +253,26 @@ export function App() {
     window.addEventListener("keydown", openNewSession);
     return () => window.removeEventListener("keydown", openNewSession);
   }, []);
+  useEffect(() => {
+    const updateWidth = () => setNarrowWindow(window.innerWidth < 960);
+    window.addEventListener("resize", updateWidth);
+    return () => window.removeEventListener("resize", updateWidth);
+  }, []);
+  useEffect(() => {
+    const toggleSidebar = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "b") {
+        event.preventDefault();
+        setSidebarPreference((current) => {
+          const next = !current;
+          localStorage.setItem(sidebarCollapsedKey, String(next));
+          return next;
+        });
+      }
+    };
+    window.addEventListener("keydown", toggleSidebar);
+    return () => window.removeEventListener("keydown", toggleSidebar);
+  }, []);
   const sessionApprovals = (approvals ?? []).filter((approval) => approval.threadId === selectedId);
-  return <div className="app-shell"><Sidebar onNewSession={() => setNewSessionOpen(true)} onSessionAction={(action, target) => setSessionAction({ action, session: target })} onArchiveViewChange={(archived) => { if (archived) void listArchivedSessions().then((items) => { setArchivedSessions(items); setShowingArchived(true); }); else setShowingArchived(false); }} />{settingsOpen ? <SettingsView notificationsEnabled={notifications.enabled} notificationError={notifications.permissionError} onNotificationsChange={notifications.setEnabled} onDisconnectAccount={() => setDisconnectAccountOpen(true)} /> : <Workspace session={session} approvals={sessionApprovals} archived={showingArchived} loading={loadingSessionId === selectedId} error={sessionError} />}{newSessionOpen && <NewSessionDialog defaultCwd={session?.cwd ?? ""} defaultModel={session?.model} onClose={() => setNewSessionOpen(false)} onCreated={(created) => { addSession(created); setNewSessionOpen(false); }} />}{sessionAction && <SessionActionDialog action={sessionAction.action} session={sessionAction.session} onClose={() => setSessionAction(undefined)} onRenamed={(renamed) => { mergeSession(renamed); setSessionAction(undefined); }} onArchived={(id) => { archiveSession(id); setSessionAction(undefined); }} onRestored={(restored) => { restoreSession(restored); setSessionAction(undefined); }} />}{disconnectAccountOpen && <DisconnectAccountDialog onClose={() => setDisconnectAccountOpen(false)} onDisconnected={() => setDisconnectAccountOpen(false)} />}</div>;
+  const toggleSidebar = () => setSidebarPreference((current) => { const next = !current; localStorage.setItem(sidebarCollapsedKey, String(next)); return next; });
+  return <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}><Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} onNewSession={() => setNewSessionOpen(true)} onSessionAction={(action, target) => setSessionAction({ action, session: target })} onArchiveViewChange={(archived) => { if (archived) void listArchivedSessions().then((items) => { setArchivedSessions(items); setShowingArchived(true); }); else setShowingArchived(false); }} />{settingsOpen ? <SettingsView notificationsEnabled={notifications.enabled} notificationError={notifications.permissionError} onNotificationsChange={notifications.setEnabled} onDisconnectAccount={() => setDisconnectAccountOpen(true)} /> : <Workspace session={session} approvals={sessionApprovals} archived={showingArchived} loading={loadingSessionId === selectedId} error={sessionError} />}{newSessionOpen && <NewSessionDialog defaultCwd={session?.cwd ?? ""} defaultModel={session?.model} onClose={() => setNewSessionOpen(false)} onCreated={(created) => { addSession(created); setNewSessionOpen(false); }} />}{sessionAction && <SessionActionDialog action={sessionAction.action} session={sessionAction.session} onClose={() => setSessionAction(undefined)} onRenamed={(renamed) => { mergeSession(renamed); setSessionAction(undefined); }} onArchived={(id) => { archiveSession(id); setSessionAction(undefined); }} onRestored={(restored) => { restoreSession(restored); setSessionAction(undefined); }} />}{disconnectAccountOpen && <DisconnectAccountDialog onClose={() => setDisconnectAccountOpen(false)} onDisconnected={() => setDisconnectAccountOpen(false)} />}</div>;
 }

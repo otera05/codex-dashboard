@@ -5,6 +5,7 @@ import { App } from "./App";
 
 describe("App", () => {
   it("renders the session dashboard", async () => {
+    localStorage.removeItem("codex-dashboard.sidebar-collapsed");
     render(<App />);
     expect((await screen.findAllByText("Realtime dashboard")).length).toBeGreaterThan(0);
     expect(screen.getByText("Codex usage")).toBeInTheDocument();
@@ -13,5 +14,11 @@ describe("App", () => {
     expect(search).toHaveFocus();
     fireEvent.change(search, { target: { value: "Authentication" } });
     expect(screen.getByText("1/3")).toBeInTheDocument();
+
+    expect(document.querySelector(".window-drag")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    expect(document.querySelector(".app-shell")).toHaveClass("sidebar-collapsed");
+    expect(screen.getByRole("button", { name: "Expand sidebar" })).toBeInTheDocument();
+    expect(localStorage.getItem("codex-dashboard.sidebar-collapsed")).toBe("true");
   });
 });
