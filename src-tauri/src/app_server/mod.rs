@@ -1,5 +1,6 @@
 mod account;
 mod approvals;
+mod events;
 mod process;
 mod rpc;
 mod sessions;
@@ -10,7 +11,6 @@ use std::{
 };
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
 use tokio::{
     process::{Child, ChildStdin},
     sync::{Mutex, RwLock},
@@ -19,7 +19,7 @@ use tokio::{
 pub use rpc::AppServerError;
 use rpc::Pending;
 
-use crate::models::{parse_account, CodexModel, DashboardSnapshot};
+use crate::models::{CodexModel, DashboardSnapshot};
 
 pub struct AppServer {
     child: Mutex<Option<Child>>,
@@ -44,29 +44,6 @@ impl AppServer {
             pending_threads: Mutex::new(HashSet::new()),
             snapshot: RwLock::new(DashboardSnapshot::default()),
         })
-    }
-
-    async fn handle_notification(self: &Arc<Self>, app: &AppHandle, method: &str, params: Value) {
-        if method == "serverRequest/resolved" {
-            if let Some(request_id) = params.get("requestId") {
-                self.snapshot
-                    .write()
-                    .await
-                    .approvals
-                    .retain(|item| item.request_id != *request_id);
-                let _ = app.emit(
-                    "dashboard-event",
-                    json!({ "type": "approval.resolved", "requestId": request_id }),
-                );
-            }
-        }
-        if Self::notification_requires_refresh(method) {
-            let refresh_server = Arc::clone(self);
-            let refresh_app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = refresh_server.refresh(&refresh_app).await;
-            });
-        }
     }
 
     pub async fn list_models(&self) -> Result<Vec<CodexModel>, AppServerError> {
@@ -102,38 +79,5 @@ impl AppServer {
                 })
             })
             .collect())
-    }
-
-    async fn refresh(&self, app: &AppHandle) -> Result<(), AppServerError> {
-        self.reload_sessions().await?;
-        let account_result = self.read_account(false).await;
-        let rates = self.read_rate_limits().await;
-        let mut snapshot = self.snapshot.write().await;
-        snapshot.account = parse_account(&account_result, &rates);
-        snapshot.connected = true;
-        let _ = app.emit(
-            "dashboard-event",
-            json!({ "type": "snapshot", "snapshot": &*snapshot }),
-        );
-        Ok(())
-    }
-
-    fn notification_requires_refresh(method: &str) -> bool {
-        matches!(
-            method,
-            "thread/started"
-                | "thread/archived"
-                | "thread/deleted"
-                | "thread/unarchived"
-                | "thread/status/changed"
-                | "thread/name/updated"
-                | "thread/tokenUsage/updated"
-                | "turn/started"
-                | "turn/completed"
-                | "item/completed"
-                | "account/updated"
-                | "account/rateLimits/updated"
-                | "account/login/completed"
-        )
     }
 }
