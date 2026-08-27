@@ -1,6 +1,8 @@
 use serde_json::{json, Value};
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
+
+use tokio::sync::Mutex;
 
 use crate::models::{
     apply_turn_history, merge_turn_history, parse_sessions, DashboardSnapshot, Session,
@@ -76,6 +78,8 @@ impl AppServer {
     }
 
     pub async fn load_session(&self, thread_id: &str) -> Result<Session, AppServerError> {
+        let session_lock = self.session_lock(thread_id).await;
+        let _guard = session_lock.lock().await;
         let mut turns = Vec::new();
         let mut cursor: Option<String> = None;
 
@@ -132,6 +136,8 @@ impl AppServer {
     }
 
     pub async fn refresh_session(&self, thread_id: &str) -> Result<Session, AppServerError> {
+        let session_lock = self.session_lock(thread_id).await;
+        let _guard = session_lock.lock().await;
         let response = match self
             .request(
                 "thread/turns/list",
@@ -340,6 +346,16 @@ impl AppServer {
         Ok(snapshot.clone())
     }
 
+    async fn session_lock(&self, thread_id: &str) -> Arc<Mutex<()>> {
+        Arc::clone(
+            self.session_locks
+                .lock()
+                .await
+                .entry(thread_id.to_owned())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    }
+
     fn preserve_loaded_history(previous_sessions: &[Session], sessions: &mut [Session]) {
         for session in sessions {
             if let Some(previous) = previous_sessions
@@ -428,5 +444,19 @@ mod tests {
             &mut pending_threads,
         );
         assert!(!pending_threads.contains("pending"));
+    }
+
+    #[tokio::test]
+    async fn reuses_locks_per_session_without_blocking_other_sessions() {
+        let server = AppServer::new();
+        let first = server.session_lock("first").await;
+        let same = server.session_lock("first").await;
+        let other = server.session_lock("other").await;
+
+        assert!(Arc::ptr_eq(&first, &same));
+        assert!(!Arc::ptr_eq(&first, &other));
+        let _first_guard = first.try_lock().expect("first session lock is available");
+        assert!(same.try_lock().is_err());
+        assert!(other.try_lock().is_ok());
     }
 }

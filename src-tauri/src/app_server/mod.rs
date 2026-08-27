@@ -6,7 +6,7 @@ mod rpc;
 mod sessions;
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{atomic::AtomicU64, Arc},
 };
 
@@ -31,6 +31,7 @@ pub struct AppServer {
     refresh_lock: Mutex<()>,
     diagnostics: Mutex<VecDeque<String>>,
     pending_threads: Mutex<HashSet<String>>,
+    session_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     pub snapshot: RwLock<DashboardSnapshot>,
 }
 
@@ -46,6 +47,7 @@ impl AppServer {
             refresh_lock: Mutex::new(()),
             diagnostics: Mutex::new(VecDeque::new()),
             pending_threads: Mutex::new(HashSet::new()),
+            session_locks: Mutex::new(HashMap::new()),
             snapshot: RwLock::new(DashboardSnapshot::default()),
         })
     }
