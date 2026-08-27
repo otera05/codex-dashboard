@@ -18,9 +18,7 @@ use tokio::{
 pub use rpc::AppServerError;
 use rpc::Pending;
 
-use crate::models::{
-    parse_account, parse_sessions, ApprovalRequest, CodexModel, DashboardSnapshot, Session,
-};
+use crate::models::{parse_account, ApprovalRequest, CodexModel, DashboardSnapshot};
 
 pub struct AppServer {
     child: Mutex<Option<Child>>,
@@ -211,45 +209,6 @@ impl AppServer {
             .collect())
     }
 
-    pub async fn reload_sessions(&self) -> Result<DashboardSnapshot, AppServerError> {
-        let mut threads = Vec::new();
-        let mut cursor: Option<String> = None;
-
-        for _ in 0..10 {
-            let response = self
-                .request(
-                    "thread/list",
-                    json!({
-                        "cursor": cursor,
-                        "limit": 100,
-                        "sortKey": "updated_at",
-                        "sortDirection": "desc"
-                    }),
-                )
-                .await?;
-            if let Some(page) = response.get("data").and_then(Value::as_array) {
-                threads.extend(page.iter().cloned());
-            }
-            cursor = response
-                .get("nextCursor")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            if cursor.is_none() {
-                break;
-            }
-        }
-
-        let mut sessions = parse_sessions(&json!({ "data": threads }));
-        let mut snapshot = self.snapshot.write().await;
-        Self::preserve_loaded_history(&snapshot.sessions, &mut sessions);
-        let mut pending_threads = self.pending_threads.lock().await;
-        Self::preserve_pending_sessions(&snapshot.sessions, &mut sessions, &mut pending_threads);
-        sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-        snapshot.sessions = sessions;
-        snapshot.connected = true;
-        Ok(snapshot.clone())
-    }
-
     async fn refresh(&self, app: &AppHandle) -> Result<(), AppServerError> {
         self.reload_sessions().await?;
         let account_result = self.read_account(false).await;
@@ -262,40 +221,6 @@ impl AppServer {
             json!({ "type": "snapshot", "snapshot": &*snapshot }),
         );
         Ok(())
-    }
-
-    fn preserve_loaded_history(previous_sessions: &[Session], sessions: &mut [Session]) {
-        for session in sessions {
-            if let Some(previous) = previous_sessions
-                .iter()
-                .find(|previous| previous.id == session.id && previous.history_loaded)
-            {
-                session.messages.clone_from(&previous.messages);
-                session.token_usage.clone_from(&previous.token_usage);
-                session.active_turn_id.clone_from(&previous.active_turn_id);
-                session.history_loaded = true;
-            }
-        }
-    }
-
-    fn preserve_pending_sessions(
-        previous_sessions: &[Session],
-        sessions: &mut Vec<Session>,
-        pending_threads: &mut HashSet<String>,
-    ) {
-        let materialized_ids = sessions
-            .iter()
-            .map(|session| session.id.clone())
-            .collect::<HashSet<_>>();
-        sessions.extend(
-            previous_sessions
-                .iter()
-                .filter(|session| {
-                    pending_threads.contains(&session.id) && !materialized_ids.contains(&session.id)
-                })
-                .cloned(),
-        );
-        pending_threads.retain(|thread_id| !materialized_ids.contains(thread_id));
     }
 
     fn notification_requires_refresh(method: &str) -> bool {
@@ -328,42 +253,4 @@ fn string_field(value: &Value, field: &str) -> String {
 
 fn optional_string_field(value: &Value, field: &str) -> Option<String> {
     value.get(field).and_then(Value::as_str).map(str::to_owned)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn preserves_pending_threads_until_they_are_materialized() {
-        let pending = Session {
-            id: "pending".to_owned(),
-            title: "New session".to_owned(),
-            cwd: "/workspace".to_owned(),
-            status: "idle".to_owned(),
-            updated_at: 2,
-            model: "Codex".to_owned(),
-            active_turn_id: None,
-            messages: Vec::new(),
-            token_usage: Default::default(),
-            history_loaded: true,
-        };
-        let mut pending_threads = HashSet::from([pending.id.clone()]);
-        let mut sessions = Vec::new();
-
-        AppServer::preserve_pending_sessions(
-            std::slice::from_ref(&pending),
-            &mut sessions,
-            &mut pending_threads,
-        );
-        assert_eq!(sessions[0].id, "pending");
-        assert!(pending_threads.contains("pending"));
-
-        AppServer::preserve_pending_sessions(
-            std::slice::from_ref(&pending),
-            &mut sessions,
-            &mut pending_threads,
-        );
-        assert!(!pending_threads.contains("pending"));
-    }
 }
