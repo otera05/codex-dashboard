@@ -207,10 +207,12 @@ pub fn run() {
         .manage(Arc::clone(&server))
         .setup(move |app| {
             let handle = app.handle().clone();
+            let reconnect_handle = handle.clone();
             let server = Arc::clone(&server);
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = server.connect(handle).await {
                     eprintln!("{error}");
+                    server.schedule_reconnect(reconnect_handle);
                 }
             });
             Ok(())

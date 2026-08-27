@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
     sync::{atomic::Ordering, Arc},
+    time::Duration,
 };
 
 use serde_json::{json, Value};
@@ -16,8 +17,12 @@ use crate::models::RpcEnvelope;
 
 use super::{AppServer, AppServerError};
 
+const INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+
 impl AppServer {
     pub async fn connect(self: &Arc<Self>, app: AppHandle) -> Result<(), AppServerError> {
+        let _connect_guard = self.connect_lock.lock().await;
         let generation = self.connection_generation.fetch_add(1, Ordering::Relaxed) + 1;
         self.disconnect().await;
         self.clear_diagnostics().await;
@@ -86,6 +91,7 @@ impl AppServer {
             if server.connection_generation.load(Ordering::Relaxed) == generation {
                 server.record_diagnostic("stdio", "stdout closed").await;
                 server.mark_disconnected(&event_app).await;
+                server.schedule_reconnect(event_app);
             }
         });
 
@@ -103,6 +109,40 @@ impl AppServer {
         self.write_notification("initialized", json!({})).await?;
         self.refresh(&app).await?;
         Ok(())
+    }
+
+    pub fn schedule_reconnect(self: &Arc<Self>, app: AppHandle) {
+        if self
+            .reconnect_running
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+
+        let server = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            let mut delay = INITIAL_RECONNECT_DELAY;
+            loop {
+                tokio::time::sleep(delay).await;
+                if server.snapshot.read().await.connected {
+                    break;
+                }
+                match server.connect(app.clone()).await {
+                    Ok(()) => break,
+                    Err(error) => {
+                        server
+                            .record_diagnostic("reconnect", &error.to_string())
+                            .await;
+                        delay = next_reconnect_delay(delay);
+                    }
+                }
+            }
+            server.reconnect_running.store(false, Ordering::Relaxed);
+            if !server.snapshot.read().await.connected {
+                server.schedule_reconnect(app);
+            }
+        });
     }
 
     async fn disconnect(&self) {
@@ -150,6 +190,10 @@ impl AppServer {
             .collect::<Vec<_>>()
             .join("; ")
     }
+}
+
+fn next_reconnect_delay(current: Duration) -> Duration {
+    current.saturating_mul(2).min(MAX_RECONNECT_DELAY)
 }
 
 fn resolve_codex_binary() -> Result<PathBuf, String> {
@@ -223,5 +267,22 @@ fn executable_name(name: &str) -> String {
     #[cfg(not(target_os = "windows"))]
     {
         name.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{next_reconnect_delay, INITIAL_RECONNECT_DELAY, MAX_RECONNECT_DELAY};
+
+    #[test]
+    fn reconnect_delay_backs_off_to_a_fixed_maximum() {
+        assert_eq!(
+            next_reconnect_delay(INITIAL_RECONNECT_DELAY),
+            INITIAL_RECONNECT_DELAY * 2
+        );
+        assert_eq!(
+            next_reconnect_delay(MAX_RECONNECT_DELAY),
+            MAX_RECONNECT_DELAY
+        );
     }
 }

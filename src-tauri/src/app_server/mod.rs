@@ -7,7 +7,10 @@ mod sessions;
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::{atomic::AtomicU64, Arc},
+    sync::{
+        atomic::{AtomicBool, AtomicU64},
+        Arc,
+    },
 };
 
 use serde_json::{json, Value};
@@ -27,6 +30,8 @@ pub struct AppServer {
     pending: Pending,
     next_id: AtomicU64,
     connection_generation: AtomicU64,
+    connect_lock: Mutex<()>,
+    reconnect_running: AtomicBool,
     refresh_revision: AtomicU64,
     refresh_lock: Mutex<()>,
     diagnostics: Mutex<VecDeque<String>>,
@@ -43,6 +48,8 @@ impl AppServer {
             pending: Pending::default(),
             next_id: AtomicU64::new(1),
             connection_generation: AtomicU64::new(0),
+            connect_lock: Mutex::new(()),
+            reconnect_running: AtomicBool::new(false),
             refresh_revision: AtomicU64::new(0),
             refresh_lock: Mutex::new(()),
             diagnostics: Mutex::new(VecDeque::new()),
